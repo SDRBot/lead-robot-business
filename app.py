@@ -268,7 +268,7 @@ def send_welcome_email(customer_email: str, plan: str, api_key: str):
         
         <div class="content">
             <h2>Your Account Details:</h2>
-            <p><strong>Plan:</strong> {plan_info['name']} (${plan_info['price']}/month)</p>
+            <p><strong>Plan:</strong> {plan_info['name']} (£{plan_info['price']}/month)</p>
             <p><strong>Monthly Lead Limit:</strong> {plan_info['leads_limit']} leads</p>
             
             <h3>🔑 Your API Key:</h3>
@@ -572,7 +572,7 @@ async def home():
             <div class="plans">
                 <div class="plan">
                     <h3>Starter Plan</h3>
-                    <div class="price">$99<span style="font-size: 0.4em;">/mo</span></div>
+                    <div class="price">£99<span style="font-size: 0.4em;">/mo</span></div>
                     <ul class="features-list">
                         <li>500 leads per month</li>
                         <li>AI-powered qualification</li>
@@ -585,7 +585,7 @@ async def home():
                 
                 <div class="plan popular">
                     <h3>Professional Plan</h3>
-                    <div class="price">$299<span style="font-size: 0.4em;">/mo</span></div>
+                    <div class="price">£299<span style="font-size: 0.4em;">/mo</span></div>
                     <ul class="features-list">
                         <li>2,000 leads per month</li>
                         <li>Everything in Starter</li>
