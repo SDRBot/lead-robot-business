@@ -1,4 +1,5 @@
-# main.py - Simple entry point for Render
+# main.py - Entry point for Render (FIXED)
+import os
 from app import app
 
 if __name__ == "__main__":
