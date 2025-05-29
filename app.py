@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 import stripe
+import hashlib
 
 # Load environment variables
 load_dotenv()
@@ -215,6 +216,26 @@ def check_usage_limit(customer_id: str) -> bool:
         return used < limit
     return False
 
+def hash_password(password: str) -> str:
+    """Hash a password for storing"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify a password against its hash"""
+    return hashlib.sha256(password.encode()).hexdigest() == hashed
+
+def add_password_column():
+    """Add password column to customers table"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE customers ADD COLUMN password_hash TEXT")
+        conn.commit()
+        print("✅ Added password column")
+    except:
+        print("⚠️ Password column already exists")
+    conn.close()
+
 # Email functions
 def send_email(to_email: str, subject: str, content: str) -> bool:
     """Send email using SendGrid"""
@@ -242,74 +263,88 @@ def send_email(to_email: str, subject: str, content: str) -> bool:
         return False
 
 def send_welcome_email(customer_email: str, plan: str, api_key: str):
-    """Send welcome email to new customers"""
+    """Send simple welcome email to new customers"""
     
     plan_info = PRICING_PLANS[plan]
     
-    subject = "🎉 Welcome to AI Lead Robot!"
+    subject = "🎉 Welcome to AI Lead Robot - Your Account is Ready!"
     
     content = f"""
     <!DOCTYPE html>
     <html>
-    <head>
-        <style>
-            body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px; }}
-            .content {{ padding: 30px; background: #f8f9fa; border-radius: 10px; margin: 20px 0; }}
-            .api-key {{ background: #e9ecef; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; }}
-            .features {{ background: white; padding: 20px; border-radius: 8px; margin: 15px 0; }}
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>🤖 Welcome to AI Lead Robot!</h1>
-            <p>Your intelligent lead qualification system is ready!</p>
-        </div>
+    <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f5f7fa;">
         
-        <div class="content">
-            <h2>Your Account Details:</h2>
-            <p><strong>Plan:</strong> {plan_info['name']} (£{plan_info['price']}/month)</p>
-            <p><strong>Monthly Lead Limit:</strong> {plan_info['leads_limit']} leads</p>
+        <div style="background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+            <h1 style="color: #667eea; text-align: center; margin-bottom: 30px;">🤖 Welcome to AI Lead Robot!</h1>
             
-            <h3>🔑 Your API Key:</h3>
-            <div class="api-key">{api_key}</div>
-            
-            <div class="features">
-                <h3>✨ What you get:</h3>
-                <ul>
-    """
-    
-    for feature in plan_info['features']:
-        content += f"<li>{feature}</li>"
-    
-    content += f"""
-                </ul>
+            <div style="background: #e8f5e9; padding: 20px; border-radius: 10px; margin: 20px 0; border-left: 5px solid #28a745;">
+                <h2 style="color: #155724; margin-top: 0;">🔥 Your 14-Day Free Trial is Active!</h2>
+                <p><strong>Plan:</strong> {plan_info['name']}</p>
+                <p><strong>Monthly Limit:</strong> {plan_info['leads_limit']} leads</p>
+                <p><strong>Price after trial:</strong> ${plan_info['price']}/month</p>
+                <p>You won't be charged until your trial ends. Cancel anytime!</p>
             </div>
             
-            <h3>🚀 Quick Start Guide:</h3>
-            <p><strong>1. Test your API:</strong></p>
-            <pre style="background: #f1f3f4; padding: 10px; border-radius: 5px; overflow-x: auto;">
+            <h2>🚀 Quick Start (3 easy steps):</h2>
+            
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3 style="margin-top: 0;">Step 1: Login to Your Dashboard</h3>
+                <p><a href="https://your-domain.onrender.com/login" style="background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">🔓 Login Here</a></p>
+                <p><strong>Email:</strong> {customer_email}<br>
+                <strong>Temporary Password:</strong> Use the API key below for now</p>
+            </div>
+            
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3 style="margin-top: 0;">Step 2: Your API Key</h3>
+                <div style="background: #e9ecef; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; border: 2px dashed #667eea;">
+                    {api_key}
+                </div>
+                <p><em>Save this securely! You'll need it for API access and as backup login.</em></p>
+            </div>
+            
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3 style="margin-top: 0;">Step 3: Test Lead Capture</h3>
+                <p>Try capturing a test lead to see how it works:</p>
+                <pre style="background: #f1f3f4; padding: 15px; border-radius: 5px; overflow-x: auto; font-size: 14px;">
 curl -X POST "https://your-domain.onrender.com/api/leads" \\
      -H "Content-Type: application/json" \\
      -H "Authorization: Bearer {api_key}" \\
      -d '{{"email": "test@company.com", "first_name": "John", "company": "Test Co"}}'
-            </pre>
+                </pre>
+            </div>
             
-            <p><strong>2. View your dashboard:</strong><br>
-            <a href="https://your-domain.onrender.com/dashboard?api_key={api_key}">Click here to see your leads</a></p>
+            <h2>🎯 What you can do now:</h2>
+            <ul>
+                <li>✅ Capture leads via API</li>
+                <li>✅ View leads in your dashboard</li>
+                <li>✅ Set up integrations (HubSpot, Zapier)</li>
+                <li>✅ Monitor usage and analytics</li>
+                <li>✅ Test the system with sample data</li>
+            </ul>
             
-            <p><strong>3. Integration help:</strong><br>
-            Reply to this email and we'll help you integrate with your website and CRM!</p>
+            <div style="background: #fff3e0; padding: 20px; border-radius: 8px; margin: 30px 0; border-left: 5px solid #ff9800;">
+                <h3 style="margin-top: 0; color: #e65100;">💡 Quick Tip</h3>
+                <p>Set up a password for easier login! Visit your dashboard and look for "Account Settings" or use the temporary API key above to login first.</p>
+            </div>
+            
+            <div style="text-align: center; margin: 30px 0; padding: 30px; background: #e3f2fd; border-radius: 8px;">
+                <h3 style="color: #1976d2; margin-top: 0;">Need Help?</h3>
+                <p>We're here to help you succeed!</p>
+                <p>📧 <strong>Email:</strong> support@yourcompany.com</p>
+                <p>📚 <strong>Documentation:</strong> <a href="https://your-domain.onrender.com/docs">API Docs</a></p>
+                <p>🎯 <strong>Dashboard:</strong> <a href="https://your-domain.onrender.com/dashboard?api_key={api_key}">Your Dashboard</a></p>
+            </div>
+            
+            <div style="text-align: center; color: #666; font-size: 14px; margin-top: 40px; border-top: 1px solid #eee; padding-top: 20px;">
+                <p>🤖 AI Lead Robot - Intelligent Lead Qualification</p>
+                <p>This email was sent to {customer_email}</p>
+                <p><a href="mailto:support@yourcompany.com" style="color: #667eea;">Unsubscribe</a> | <a href="https://your-domain.onrender.com/privacy" style="color: #667eea;">Privacy Policy</a></p>
+            </div>
         </div>
         
-        <div style="text-align: center; color: #666; margin-top: 30px;">
-            <p>Questions? Just reply to this email!</p>
-            <p>🤖 Happy lead qualifying!</p>
-        </div>
     </body>
     </html>
-    """
-    
+    """ 
     return send_email(customer_email, subject, content)
 
 def sync_lead_to_hubspot(lead_data: dict):
@@ -1131,7 +1166,7 @@ async def checkout(plan: str, request: Request):
 
 @app.get("/success", response_class=HTMLResponse)
 async def payment_success(session_id: str, request: Request):
-    """Payment success page with better error handling"""
+    """Payment success page with better error handling and password setup"""
     
     if not session_id:
         return HTMLResponse("""
@@ -1167,6 +1202,10 @@ async def payment_success(session_id: str, request: Request):
                     background: #e8f5e9; padding: 20px; border-radius: 10px;
                     margin: 20px 0; border-left: 5px solid #28a745;
                 }}
+                .password-setup {{
+                    background: #fff3e0; padding: 20px; border-radius: 10px;
+                    margin: 20px 0; border-left: 5px solid #ff9800;
+                }}
                 .api-key {{
                     background: #f8f9fa; padding: 20px; border-radius: 8px;
                     font-family: monospace; font-size: 14px; margin: 20px 0;
@@ -1175,7 +1214,17 @@ async def payment_success(session_id: str, request: Request):
                 .btn {{
                     background: #667eea; color: white; padding: 15px 30px;
                     text-decoration: none; border-radius: 8px; display: inline-block;
-                    margin: 10px;
+                    margin: 10px; font-weight: bold;
+                }}
+                .btn-primary {{
+                    background: #28a745; 
+                }}
+                .btn-secondary {{
+                    background: #6c757d;
+                }}
+                .step {{
+                    background: #f8f9fa; padding: 15px; border-radius: 8px;
+                    margin: 15px 0; text-align: left;
                 }}
             </style>
         </head>
@@ -1191,22 +1240,61 @@ async def payment_success(session_id: str, request: Request):
                     <p>You won't be charged until your trial ends. Cancel anytime.</p>
                 </div>
                 
-                <p><strong>Plan:</strong> {plan_info['name']} (£{plan_info['price']}/month after trial)</p>
+                <div class="password-setup">
+                    <h3>🔒 Secure Your Account</h3>
+                    <p><strong>Recommended:</strong> Set up a password for easy login to your dashboard.</p>
+                    <p>You can always use your API key to login, but a password is more convenient!</p>
+                </div>
+                
+                <p><strong>Plan:</strong> {plan_info['name']} (${plan_info['price']}/month after trial)</p>
                 <p><strong>Monthly Limit:</strong> {plan_info['leads_limit']} leads</p>
                 <p><strong>Email:</strong> {payment_info['customer_email']}</p>
                 
+                <h3>🚀 Next Steps:</h3>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin: 30px 0;">
+                    <a href="/set-password?api_key={payment_info['api_key']}" class="btn btn-primary">
+                        🔒 Set Up Password<br>
+                        <small style="font-weight: normal;">(Recommended)</small>
+                    </a>
+                    <a href="/dashboard?api_key={payment_info['api_key']}" class="btn">
+                        📊 Go to Dashboard<br>
+                        <small style="font-weight: normal;">(Skip password setup)</small>
+                    </a>
+                </div>
+                
                 <h3>🔑 Your API Key:</h3>
                 <div class="api-key">{payment_info['api_key']}</div>
-                <p><em>⚠️ Save this key securely - you'll need it to access your account!</em></p>
+                <p><em>⚠️ Save this key securely - you'll need it for API access and as backup login!</em></p>
                 
-                <h3>🚀 Start Using Your Trial:</h3>
-                <a href="/dashboard?api_key={payment_info['api_key']}" class="btn">📊 Go to Dashboard</a>
-                <a href="/test-form?api_key={payment_info['api_key']}" class="btn">🧪 Test Lead Capture</a>
+                <div class="step">
+                    <h3>📋 What happens next:</h3>
+                    <ol style="text-align: left;">
+                        <li><strong>Set up your password</strong> (optional but recommended)</li>
+                        <li><strong>Check your email</strong> - We've sent detailed setup instructions</li>
+                        <li><strong>Test lead capture</strong> - Try the system with sample data</li>
+                        <li><strong>Integrate with your website</strong> - Add our API to capture real leads</li>
+                        <li><strong>Watch leads get qualified automatically!</strong></li>
+                    </ol>
+                </div>
                 
-                <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
+                <div style="margin-top: 30px; padding: 20px; background: #e3f2fd; border-radius: 8px;">
                     <h3>📧 Check Your Email</h3>
                     <p>We've sent detailed setup instructions to <strong>{payment_info['customer_email']}</strong></p>
                     <p>If you don't see it, check your spam folder!</p>
+                </div>
+                
+                <div style="margin-top: 30px; padding: 20px; background: #f1f8e9; border-radius: 8px;">
+                    <h3>🎯 Quick Start Options:</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 15px;">
+                        <a href="/test-form?api_key={payment_info['api_key']}" class="btn btn-secondary">🧪 Test Lead Capture</a>
+                        <a href="/docs" class="btn btn-secondary">📚 API Documentation</a>
+                        <a href="/integrations?api_key={payment_info['api_key']}" class="btn btn-secondary">🔗 Setup Integrations</a>
+                    </div>
+                </div>
+                
+                <div style="margin-top: 30px; color: #666; font-size: 14px;">
+                    <p>💡 <strong>Tip:</strong> Bookmark your dashboard link or set up a password for easy access!</p>
+                    <p>🎯 <strong>Need help?</strong> Email us at support@yourcompany.com</p>
                 </div>
             </div>
         </body>
@@ -1250,7 +1338,7 @@ def payment_cancelled():
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page():
-    """Customer login page"""
+    """Simple login page"""
     return """
     <!DOCTYPE html>
     <html>
@@ -1297,8 +1385,8 @@ async def login_page():
                 </div>
                 
                 <div class="form-group">
-                    <label>API Key</label>
-                    <input type="password" name="api_key" required placeholder="Your API key from signup email">
+                    <label>Password</label>
+                    <input type="password" name="password" required placeholder="Your password">
                 </div>
                 
                 <button type="submit" class="btn">🔓 Login to Dashboard</button>
@@ -1308,7 +1396,7 @@ async def login_page():
             
             <div class="links">
                 <a href="/">← Back to Home</a> | 
-                <a href="/forgot-key">Forgot API Key?</a>
+                <a href="/forgot-password">Forgot Password?</a>
             </div>
             
             <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 20px; font-size: 14px;">
@@ -1323,35 +1411,218 @@ async def login_page():
                 
                 const formData = new FormData(e.target);
                 const email = formData.get('email');
-                const apiKey = formData.get('api_key');
+                const password = formData.get('password');
                 
                 document.getElementById('message').innerHTML = '<div style="text-align: center;">🔄 Checking credentials...</div>';
                 
                 try {
-                    // Test the API key by making a request
-                    const response = await fetch('/api/analytics', {
-                        headers: {
-                            'Authorization': 'Bearer ' + apiKey
-                        }
+                    const response = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: email, password: password })
                     });
                     
+                    const result = await response.json();
+                    
                     if (response.ok) {
-                        // Successful login
                         document.getElementById('message').innerHTML = '<div class="success">✅ Login successful! Redirecting...</div>';
                         setTimeout(() => {
-                            window.location.href = '/dashboard?api_key=' + apiKey;
+                            window.location.href = '/dashboard?api_key=' + result.api_key;
                         }, 1000);
                     } else {
-                        throw new Error('Invalid credentials');
+                        throw new Error(result.detail);
                     }
                 } catch (error) {
-                    document.getElementById('message').innerHTML = '<div class="error">❌ Invalid email or API key. Please check your credentials.</div>';
+                    document.getElementById('message').innerHTML = '<div class="error">❌ Invalid email or password.</div>';
                 }
             });
         </script>
     </body>
     </html>
     """
+
+@app.post("/api/login")
+async def login_api(request: Request):
+    """Login with email and password"""
+    try:
+        body = await request.json()
+        email = body.get('email')
+        password = body.get('password')
+        
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="Email and password are required")
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT api_key, password_hash FROM customers WHERE email = ? AND status = 'active'", (email,))
+        customer = cursor.fetchone()
+        conn.close()
+        
+        if not customer:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+        api_key, password_hash = customer
+        
+        # Check password
+        if password_hash and verify_password(password, password_hash):
+            return {"api_key": api_key}
+        else:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/set-password", response_class=HTMLResponse)
+async def set_password_page(api_key: str = None):
+    """Set password for new customers"""
+    
+    if not api_key:
+        return HTMLResponse("<h1>API key required</h1>", status_code=400)
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🔒 Set Your Password - AI Lead Robot</title>
+        <style>
+            body {{ 
+                font-family: Arial, sans-serif; background: #f5f7fa; 
+                display: flex; justify-content: center; align-items: center; 
+                min-height: 100vh; margin: 0; 
+            }}
+            .container {{ 
+                background: white; padding: 40px; border-radius: 15px; 
+                box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 500px; width: 100%; 
+            }}
+            h1 {{ text-align: center; color: #333; }}
+            .form-group {{ margin-bottom: 20px; }}
+            label {{ display: block; margin-bottom: 5px; font-weight: bold; color: #555; }}
+            input {{ 
+                width: 100%; padding: 12px; border: 1px solid #ddd; 
+                border-radius: 5px; font-size: 16px; box-sizing: border-box; 
+            }}
+            .btn {{ 
+                background: #667eea; color: white; padding: 12px 24px; 
+                border: none; border-radius: 5px; font-size: 16px; 
+                cursor: pointer; width: 100%; 
+            }}
+            .btn:hover {{ background: #5a6fd8; }}
+            .message {{ padding: 15px; border-radius: 8px; margin: 20px 0; }}
+            .success {{ background: #d4edda; color: #155724; }}
+            .error {{ background: #f8d7da; color: #721c24; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔒 Set Your Password</h1>
+            <p>Create a secure password for easy login to your dashboard.</p>
+            
+            <form id="setPasswordForm">
+                <input type="hidden" name="api_key" value="{api_key}">
+                
+                <div class="form-group">
+                    <label>New Password</label>
+                    <input type="password" name="password" required minlength="8" placeholder="At least 8 characters">
+                </div>
+                
+                <div class="form-group">
+                    <label>Confirm Password</label>
+                    <input type="password" name="confirm_password" required placeholder="Enter password again">
+                </div>
+                
+                <button type="submit" class="btn">🔒 Set Password</button>
+            </form>
+            
+            <div id="message"></div>
+            
+            <p style="text-align: center; margin-top: 30px;">
+                <a href="/dashboard?api_key={api_key}" style="color: #667eea;">← Skip for now, go to dashboard</a>
+            </p>
+        </div>
+        
+        <script>
+            document.getElementById('setPasswordForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                
+                const formData = new FormData(e.target);
+                const password = formData.get('password');
+                const confirmPassword = formData.get('confirm_password');
+                const apiKey = formData.get('api_key');
+                
+                if (password !== confirmPassword) {{
+                    document.getElementById('message').innerHTML = 
+                        '<div class="message error">❌ Passwords do not match.</div>';
+                    return;
+                }}
+                
+                try {{
+                    const response = await fetch('/api/set-password', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ api_key: apiKey, password: password }})
+                    }});
+                    
+                    const result = await response.json();
+                    
+                    if (response.ok) {{
+                        document.getElementById('message').innerHTML = 
+                            '<div class="message success">✅ Password set successfully! Redirecting...</div>';
+                        setTimeout(() => {{
+                            window.location.href = '/dashboard?api_key=' + apiKey;
+                        }}, 2000);
+                    }} else {{
+                        document.getElementById('message').innerHTML = 
+                            '<div class="message error">❌ ' + result.detail + '</div>';
+                    }}
+                }} catch (error) {{
+                    document.getElementById('message').innerHTML = 
+                        '<div class="message error">❌ Error setting password. Please try again.</div>';
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """
+
+@app.post("/api/set-password")
+async def set_password_api(request: Request):
+    """Set password for customer"""
+    try:
+        body = await request.json()
+        api_key = body.get('api_key')
+        password = body.get('password')
+        
+        if not api_key or not password:
+            raise HTTPException(status_code=400, detail="API key and password are required")
+        
+        if len(password) < 8:
+            raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+        
+        # Hash the password
+        password_hash = hash_password(password)
+        
+        # Update customer record
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE customers 
+            SET password_hash = ?, updated_at = ?
+            WHERE api_key = ? AND status = 'active'
+        """, (password_hash, datetime.now(), api_key))
+        
+        if cursor.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Invalid API key")
+        
+        conn.commit()
+        conn.close()
+        
+        return {"message": "Password set successfully"}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/forgot-key", response_class=HTMLResponse)
 async def forgot_key_page():
@@ -1871,6 +2142,8 @@ async def create_lead(lead: LeadInput, customer: dict = Depends(get_current_cust
         conn.commit()
         conn.close()
         
+
+
         # Send welcome email to lead
         email_sent = False
         if lead.first_name and SERVICES["sendgrid"]:
@@ -1899,6 +2172,8 @@ async def create_lead(lead: LeadInput, customer: dict = Depends(get_current_cust
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating lead: {str(e)}")
+
+
 
 @app.get("/api/leads")
 async def get_leads(customer: dict = Depends(get_current_customer), skip: int = 0, limit: int = 50):
