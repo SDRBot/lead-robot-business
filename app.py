@@ -829,7 +829,7 @@ curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
            </tr>
        """
    
-   html += f"""
+    html += f"""
        </table>
        
        <div style="margin-top: 40px; text-align: center; color: #666;">
@@ -845,7 +845,7 @@ curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
    </html>
    """
    
-   return HTMLResponse(html)
+    return HTMLResponse(html)
 
 @app.get("/test-form", response_class=HTMLResponse)
 async def test_form(api_key: str):
@@ -879,7 +879,7 @@ async def test_form(api_key: str):
            <h1>🧪 Test Your Lead Capture</h1>
            <p>Use this form to test your AI lead qualification system:</p>
            
-           <form id="testForm">
+            <form id="testForm">
                <div class="form-group">
                    <label>Email Address *</label>
                    <input type="email" name="email" required placeholder="test@company.com">
