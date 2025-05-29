@@ -307,7 +307,7 @@ curl -X POST "https://your-domain.onrender.com/api/leads" \\
 
 # Stripe functions
 def create_checkout_session(plan: str, success_url: str, cancel_url: str):
-    """Create Stripe checkout session"""
+    """Create Stripe checkout session with better error handling"""
     
     if plan not in PRICING_PLANS:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -315,18 +315,49 @@ def create_checkout_session(plan: str, success_url: str, cancel_url: str):
     plan_info = PRICING_PLANS[plan]
     
     try:
+        # First, create a product if it doesn't exist
+        products = stripe.Product.list(limit=100)
+        product_name = f"AI Lead Robot - {plan_info['name']}"
+        
+        existing_product = None
+        for product in products['data']:
+            if product['name'] == product_name:
+                existing_product = product
+                break
+        
+        if not existing_product:
+            product = stripe.Product.create(
+                name=product_name,
+                description=plan_info['description']
+            )
+        else:
+            product = existing_product
+        
+        # Create or get price
+        prices = stripe.Price.list(product=product['id'], limit=100)
+        existing_price = None
+        
+        for price in prices['data']:
+            if (price['unit_amount'] == plan_info['price'] * 100 and 
+                price['recurring']['interval'] == 'month'):
+                existing_price = price
+                break
+        
+        if not existing_price:
+            price = stripe.Price.create(
+                product=product['id'],
+                unit_amount=plan_info['price'] * 100,
+                currency='usd',
+                recurring={'interval': 'month'}
+            )
+        else:
+            price = existing_price
+        
+        # Create checkout session
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
-                'price_data': {
-                    'currency': 'usd',
-                    'product_data': {
-                        'name': f"AI Lead Robot - {plan_info['name']}",
-                        'description': f"{plan_info['description']} - {plan_info['leads_limit']} leads/month",
-                    },
-                    'unit_amount': plan_info['price'] * 100,
-                    'recurring': {'interval': 'month'}
-                },
+                'price': price['id'],
                 'quantity': 1,
             }],
             mode='subscription',
@@ -334,21 +365,41 @@ def create_checkout_session(plan: str, success_url: str, cancel_url: str):
             cancel_url=cancel_url,
             metadata={'plan': plan},
             allow_promotion_codes=True,
+            billing_address_collection='required',
+            customer_email=None,  # Let customer enter their email
         )
         
+        print(f"✅ Created checkout session: {checkout_session.id}")
         return checkout_session.url
         
+    except stripe.error.StripeError as e:
+        print(f"❌ Stripe error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
     except Exception as e:
+        print(f"❌ General error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating checkout: {str(e)}")
-
+        
 def handle_successful_payment(session_id: str):
-    """Handle successful payment and create customer account"""
+    """Handle successful payment with better error handling"""
     
     try:
-        session = stripe.checkout.Session.retrieve(session_id)
+        # Retrieve the session
+        session = stripe.checkout.Session.retrieve(
+            session_id,
+            expand=['customer', 'subscription']
+        )
+        
+        print(f"Retrieved session: {session}")
+        
+        if not session.customer_details or not session.customer_details.email:
+            raise HTTPException(status_code=400, detail="No customer email found")
         
         customer_email = session.customer_details.email
-        plan = session.metadata.plan
+        plan = session.metadata.get('plan')
+        
+        if not plan or plan not in PRICING_PLANS:
+            raise HTTPException(status_code=400, detail="Invalid plan in session metadata")
+        
         stripe_customer_id = session.customer
         stripe_subscription_id = session.subscription
         
@@ -362,15 +413,34 @@ def handle_successful_payment(session_id: str):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute("""
-            INSERT INTO customers (
-                id, email, stripe_customer_id, stripe_subscription_id, 
-                plan, api_key, leads_limit, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            customer_id, customer_email, stripe_customer_id, stripe_subscription_id,
-            plan, api_key, plan_info['leads_limit'], datetime.now(), datetime.now()
-        ))
+        # Check if customer already exists
+        cursor.execute("SELECT id FROM customers WHERE email = ?", (customer_email,))
+        existing_customer = cursor.fetchone()
+        
+        if existing_customer:
+            # Update existing customer
+            cursor.execute("""
+                UPDATE customers SET
+                    stripe_customer_id = ?, stripe_subscription_id = ?,
+                    plan = ?, api_key = ?, leads_limit = ?,
+                    status = 'active', updated_at = ?
+                WHERE email = ?
+            """, (
+                stripe_customer_id, stripe_subscription_id, plan, api_key,
+                plan_info['leads_limit'], datetime.now(), customer_email
+            ))
+            customer_id = existing_customer[0]
+        else:
+            # Create new customer
+            cursor.execute("""
+                INSERT INTO customers (
+                    id, email, stripe_customer_id, stripe_subscription_id, 
+                    plan, api_key, leads_limit, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                customer_id, customer_email, stripe_customer_id, stripe_subscription_id,
+                plan, api_key, plan_info['leads_limit'], datetime.now(), datetime.now()
+            ))
         
         # Log the signup
         cursor.execute("""
@@ -378,11 +448,14 @@ def handle_successful_payment(session_id: str):
             VALUES (?, ?, ?, ?, ?)
         """, (
             str(uuid.uuid4()), customer_id, "customer_signup", 
-            json.dumps({"plan": plan, "email": customer_email}), datetime.now()
+            json.dumps({"plan": plan, "email": customer_email, "session_id": session_id}), 
+            datetime.now()
         ))
         
         conn.commit()
         conn.close()
+        
+        print(f"✅ Customer created: {customer_email} with plan {plan}")
         
         # Send welcome email
         send_welcome_email(customer_email, plan, api_key)
@@ -395,7 +468,11 @@ def handle_successful_payment(session_id: str):
             "subscription_id": stripe_subscription_id
         }
         
+    except stripe.error.StripeError as e:
+        print(f"❌ Stripe error in payment processing: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
     except Exception as e:
+        print(f"❌ Error processing payment: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing payment: {str(e)}")
 
 # Routes - Public pages
