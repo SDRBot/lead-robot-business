@@ -580,8 +580,8 @@ def handle_successful_payment(session_id: str):
         print(f"🔧 Plan: {plan}")
         
         # Get Stripe IDs
-        stripe_customer_id = session.customer
-        stripe_subscription_id = None
+        stripe_customer_id = str(session.customer) if session.customer else None
+        stripe_subscription_id = str(session.subscription) if session.subscription else None
         
         if session.subscription:
             if isinstance(session.subscription, str):
@@ -623,7 +623,6 @@ def handle_successful_payment(session_id: str):
                 customer_id = existing_customer[0]
             else:
                 print(f"🔧 Creating new customer: {customer_email}")
-                # Create new customer
                 cursor.execute("""
                     INSERT INTO customers (
                         id, email, stripe_customer_id, stripe_subscription_id, 
@@ -633,7 +632,7 @@ def handle_successful_payment(session_id: str):
                     customer_id, customer_email, stripe_customer_id, stripe_subscription_id,
                     plan, api_key, plan_info['leads_limit'], 'active', datetime.now(), datetime.now()
                 ))
-            
+                
             # Log the signup
             cursor.execute("""
                 INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
