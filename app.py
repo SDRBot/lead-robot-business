@@ -312,6 +312,84 @@ curl -X POST "https://your-domain.onrender.com/api/leads" \\
     
     return send_email(customer_email, subject, content)
 
+def sync_lead_to_hubspot(lead_data: dict):
+    """Sync qualified lead to HubSpot"""
+    hubspot_key = os.getenv("HUBSPOT_API_KEY")
+    if not hubspot_key:
+        print("⚠️ HubSpot API key not configured")
+        return False
+    
+    try:
+        import requests
+        
+        # Prepare HubSpot contact data
+        hubspot_contact = {
+            "properties": {
+                "email": lead_data["email"],
+                "firstname": lead_data.get("first_name", ""),
+                "lastname": lead_data.get("last_name", ""),
+                "company": lead_data.get("company", ""),
+                "phone": lead_data.get("phone", ""),
+                "lifecyclestage": "lead",
+                "lead_source": "AI Lead Robot",
+                "hs_lead_status": "NEW"
+            }
+        }
+        
+        # Add qualification score if available
+        if lead_data.get("qualification_score"):
+            hubspot_contact["properties"]["qualification_score"] = str(lead_data["qualification_score"])
+        
+        # Create contact in HubSpot
+        response = requests.post(
+            "https://api.hubapi.com/crm/v3/objects/contacts",
+            headers={
+                "Authorization": f"Bearer {hubspot_key}",
+                "Content-Type": "application/json"
+            },
+            json=hubspot_contact
+        )
+        
+        if response.status_code in [200, 201]:
+            contact_data = response.json()
+            print(f"✅ Lead synced to HubSpot: {lead_data['email']} (ID: {contact_data.get('id')})")
+            return True
+        elif response.status_code == 409:
+            # Contact already exists - try to update
+            print(f"⚠️ Contact already exists in HubSpot: {lead_data['email']}")
+            return True
+        else:
+            print(f"❌ HubSpot sync failed: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ HubSpot sync error: {e}")
+        return False
+
+def test_hubspot_connection():
+    """Test HubSpot connection"""
+    hubspot_key = os.getenv("HUBSPOT_API_KEY")
+    if not hubspot_key:
+        return {"connected": False, "error": "No API key configured"}
+    
+    try:
+        import requests
+        
+        # Test API connection
+        response = requests.get(
+            "https://api.hubapi.com/crm/v3/objects/contacts",
+            headers={"Authorization": f"Bearer {hubspot_key}"},
+            params={"limit": 1}
+        )
+        
+        if response.status_code == 200:
+            return {"connected": True, "message": "HubSpot connected successfully"}
+        else:
+            return {"connected": False, "error": f"HTTP {response.status_code}: {response.text}"}
+            
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
+
 # Add this RIGHT AFTER your send_welcome_email function
 def init_hubspot_service():
     """Initialize HubSpot integration"""
@@ -671,6 +749,116 @@ async def privacy_policy():
     </html>
     """
 
+@app.get("/hubspot-setup", response_class=HTMLResponse)
+async def hubspot_setup():
+    """HubSpot setup instructions"""
+    
+    hubspot_status = test_hubspot_connection()
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🔗 HubSpot Integration - AI Lead Robot</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background: #f5f7fa; }}
+            .container {{ background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }}
+            .status {{ padding: 15px; border-radius: 8px; margin: 20px 0; }}
+            .connected {{ background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }}
+            .disconnected {{ background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }}
+            .step {{ background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #667eea; }}
+            .btn {{ background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; }}
+            code {{ background: #f1f3f4; padding: 3px 6px; border-radius: 3px; font-family: monospace; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔗 HubSpot Integration Setup</h1>
+            
+            <div class="status {'connected' if hubspot_status['connected'] else 'disconnected'}">
+                {'✅ HubSpot Connected!' if hubspot_status['connected'] else '❌ HubSpot Not Connected'}
+                <br>
+                {hubspot_status.get('message', '') or hubspot_status.get('error', '')}
+            </div>
+            
+            {'''
+            <div class="step">
+                <h3>🎯 What This Integration Does:</h3>
+                <ul>
+                    <li>✅ Automatically creates contacts in HubSpot for every new lead</li>
+                    <li>✅ Syncs lead information (name, email, company, phone)</li>
+                    <li>✅ Tags leads with source "AI Lead Robot"</li>
+                    <li>✅ Sets lifecycle stage to "Lead"</li>
+                    <li>✅ Includes qualification scores when available</li>
+                </ul>
+            </div>
+            
+            <h2>🔧 Setup Instructions:</h2>
+            
+            <div class="step">
+                <h3>Step 1: Create HubSpot Private App</h3>
+                <ol>
+                    <li>Go to <a href="https://developers.hubspot.com/" target="_blank">HubSpot Developers</a></li>
+                    <li>Sign in with your HubSpot account</li>
+                    <li>Click "Manage Apps" → "Create App"</li>
+                    <li>Name it "AI Lead Robot"</li>
+                    <li>Add description: "Lead qualification integration"</li>
+                </ol>
+            </div>
+            
+            <div class="step">
+                <h3>Step 2: Configure Permissions</h3>
+                <ol>
+                    <li>Go to the "Scopes" tab</li>
+                    <li>Select these permissions:</li>
+                    <ul>
+                        <li><code>crm.objects.contacts.read</code></li>
+                        <li><code>crm.objects.contacts.write</code></li>
+                    </ul>
+                    <li>Click "Create App"</li>
+                </ol>
+            </div>
+            
+            <div class="step">
+                <h3>Step 3: Get Your API Token</h3>
+                <ol>
+                    <li>After creating the app, go to "Auth" tab</li>
+                    <li>Copy the "Private App Token" (starts with <code>pat-</code>)</li>
+                    <li>Email us with your token to activate the integration</li>
+                </ol>
+                
+                <p><strong>📧 Email to:</strong> support@yourcompany.com</p>
+                <p><strong>Subject:</strong> HubSpot Integration Setup</p>
+                <p><strong>Include:</strong></p>
+                <ul>
+                    <li>Your HubSpot Private App Token</li>
+                    <li>Your AI Lead Robot email address</li>
+                    <li>Confirmation that you want to enable auto-sync</li>
+                </ul>
+            </div>
+            ''' if not hubspot_status['connected'] else '''
+            <div class="step">
+                <h3>🎉 Integration Active!</h3>
+                <p>Your HubSpot integration is working. New leads will automatically appear in your HubSpot CRM as contacts.</p>
+                
+                <h4>✨ What happens automatically:</h4>
+                <ul>
+                    <li>Every new lead gets created as a HubSpot contact</li>
+                    <li>Lead source is tagged as "AI Lead Robot"</li>
+                    <li>Lifecycle stage is set to "Lead"</li>
+                    <li>All lead information is synced (name, email, company, phone)</li>
+                </ul>
+            </div>
+            '''}
+            
+            <p style="text-align: center; margin-top: 40px;">
+                <a href="/" class="btn">← Back to Home</a>
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
 @app.get("/terms", response_class=HTMLResponse)
 async def terms_of_service():
     """Terms of service"""
@@ -786,12 +974,17 @@ async def home():
 </head>
 <body>
     <div class="hero">
-        <div class="container">
-            <h1>🤖 AI Lead Robot</h1>
-            <p>Stop wasting time on unqualified leads. Our AI automatically qualifies your leads and sends you only the hot ones ready to buy.</p>
-            <a href="#pricing" class="btn" style="width: auto; margin-top: 20px;">Start 14-Day Free Trial</a>
+    <div class="container">
+        <h1>🤖 AI Lead Robot</h1>
+        <p>Stop wasting time on unqualified leads. Our AI automatically qualifies your leads and sends you only the hot ones ready to buy.</p>
+        
+        <!-- Updated buttons section -->
+        <div style="margin: 30px 0;">
+            <a href="#pricing" class="btn" style="width: auto; margin: 10px;">Start 14-Day Free Trial</a>
+            <a href="/login" class="btn" style="width: auto; margin: 10px; background: #2c3e50;">🔓 Customer Login</a>
         </div>
     </div>
+</div>
     
     <div class="container">
         <div class="features">
@@ -1052,6 +1245,255 @@ def payment_cancelled():
        </a>
    </div>
    """
+
+# Add these routes after your existing routes
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page():
+    """Customer login page"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🔐 Login - AI Lead Robot</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; background: #f5f7fa; 
+                display: flex; justify-content: center; align-items: center; 
+                min-height: 100vh; margin: 0; 
+            }
+            .login-container { 
+                background: white; padding: 40px; border-radius: 15px; 
+                box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 400px; width: 100%; 
+            }
+            h1 { text-align: center; color: #333; margin-bottom: 30px; }
+            .form-group { margin-bottom: 20px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+            input { 
+                width: 100%; padding: 12px; border: 1px solid #ddd; 
+                border-radius: 5px; font-size: 16px; box-sizing: border-box; 
+            }
+            .btn { 
+                background: #667eea; color: white; padding: 12px 24px; 
+                border: none; border-radius: 5px; font-size: 16px; 
+                cursor: pointer; width: 100%; margin-top: 10px; 
+            }
+            .btn:hover { background: #5a6fd8; }
+            .links { text-align: center; margin-top: 20px; }
+            .links a { color: #667eea; text-decoration: none; margin: 0 10px; }
+            .error { background: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
+            .success { background: #d4edda; color: #155724; padding: 10px; border-radius: 5px; margin-bottom: 20px; }
+        </style>
+    </head>
+    <body>
+        <div class="login-container">
+            <h1>🤖 AI Lead Robot</h1>
+            <h2 style="text-align: center; color: #666; margin-bottom: 30px;">Login to Your Account</h2>
+            
+            <form id="loginForm">
+                <div class="form-group">
+                    <label>Email Address</label>
+                    <input type="email" name="email" required placeholder="your@email.com">
+                </div>
+                
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="password" name="api_key" required placeholder="Your API key from signup email">
+                </div>
+                
+                <button type="submit" class="btn">🔓 Login to Dashboard</button>
+            </form>
+            
+            <div id="message"></div>
+            
+            <div class="links">
+                <a href="/">← Back to Home</a> | 
+                <a href="/forgot-key">Forgot API Key?</a>
+            </div>
+            
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 20px; font-size: 14px;">
+                <strong>💡 Don't have an account?</strong><br>
+                <a href="/#pricing">Start your 14-day free trial</a> and we'll email you your login details.
+            </div>
+        </div>
+        
+        <script>
+            document.getElementById('loginForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const formData = new FormData(e.target);
+                const email = formData.get('email');
+                const apiKey = formData.get('api_key');
+                
+                document.getElementById('message').innerHTML = '<div style="text-align: center;">🔄 Checking credentials...</div>';
+                
+                try {
+                    // Test the API key by making a request
+                    const response = await fetch('/api/analytics', {
+                        headers: {
+                            'Authorization': 'Bearer ' + apiKey
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        // Successful login
+                        document.getElementById('message').innerHTML = '<div class="success">✅ Login successful! Redirecting...</div>';
+                        setTimeout(() => {
+                            window.location.href = '/dashboard?api_key=' + apiKey;
+                        }, 1000);
+                    } else {
+                        throw new Error('Invalid credentials');
+                    }
+                } catch (error) {
+                    document.getElementById('message').innerHTML = '<div class="error">❌ Invalid email or API key. Please check your credentials.</div>';
+                }
+            });
+        </script>
+    </body>
+    </html>
+    """
+
+@app.get("/forgot-key", response_class=HTMLResponse)
+async def forgot_key_page():
+    """Forgot API key page"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🔑 Forgot API Key - AI Lead Robot</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; background: #f5f7fa; 
+                display: flex; justify-content: center; align-items: center; 
+                min-height: 100vh; margin: 0; 
+            }
+            .container { 
+                background: white; padding: 40px; border-radius: 15px; 
+                box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 500px; width: 100%; 
+            }
+            h1 { text-align: center; color: #333; }
+            .form-group { margin-bottom: 20px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+            input { 
+                width: 100%; padding: 12px; border: 1px solid #ddd; 
+                border-radius: 5px; font-size: 16px; box-sizing: border-box; 
+            }
+            .btn { 
+                background: #667eea; color: white; padding: 12px 24px; 
+                border: none; border-radius: 5px; font-size: 16px; 
+                cursor: pointer; width: 100%; 
+            }
+            .btn:hover { background: #5a6fd8; }
+            .message { padding: 15px; border-radius: 8px; margin: 20px 0; }
+            .success { background: #d4edda; color: #155724; }
+            .error { background: #f8d7da; color: #721c24; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔑 Forgot Your API Key?</h1>
+            <p>Enter your email address and we'll send you your API key.</p>
+            
+            <form id="forgotForm">
+                <div class="form-group">
+                    <label>Email Address</label>
+                    <input type="email" name="email" required placeholder="your@email.com">
+                </div>
+                
+                <button type="submit" class="btn">📧 Send My API Key</button>
+            </form>
+            
+            <div id="message"></div>
+            
+            <p style="text-align: center; margin-top: 30px;">
+                <a href="/login" style="color: #667eea;">← Back to Login</a>
+            </p>
+        </div>
+        
+        <script>
+            document.getElementById('forgotForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const formData = new FormData(e.target);
+                const email = formData.get('email');
+                
+                try {
+                    const response = await fetch('/api/forgot-key', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email: email })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        document.getElementById('message').innerHTML = 
+                            '<div class="message success">✅ API key sent to your email!</div>';
+                    } else {
+                        document.getElementById('message').innerHTML = 
+                            '<div class="message error">❌ ' + result.detail + '</div>';
+                    }
+                } catch (error) {
+                    document.getElementById('message').innerHTML = 
+                        '<div class="message error">❌ Error sending email. Please try again.</div>';
+                }
+            });
+        </script>
+    </body>
+    </html>
+    """
+
+@app.post("/api/forgot-key")
+async def forgot_key_api(request: Request):
+    """Send API key to customer email"""
+    try:
+        body = await request.json()
+        email = body.get('email')
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Email is required")
+        
+        # Find customer by email
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT api_key, plan FROM customers WHERE email = ? AND status = 'active'", (email,))
+        customer = cursor.fetchone()
+        conn.close()
+        
+        if not customer:
+            raise HTTPException(status_code=404, detail="No active account found with this email")
+        
+        api_key, plan = customer
+        
+        # Send email with API key
+        subject = "🔑 Your AI Lead Robot API Key"
+        content = f"""
+        <div style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <h2>Your API Key</h2>
+            <p>Here's your AI Lead Robot API key:</p>
+            
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; margin: 20px 0;">
+                {api_key}
+            </div>
+            
+            <p><strong>Plan:</strong> {plan.title()} Plan</p>
+            
+            <p><a href="https://your-domain.onrender.com/login" style="background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">Login to Dashboard</a></p>
+            
+            <p>Keep this key secure and don't share it with anyone!</p>
+        </div>
+        """
+        
+        email_sent = send_email(email, subject, content)
+        
+        if email_sent:
+            return {"message": "API key sent to your email"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send email")
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # Customer dashboard
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -1444,24 +1886,10 @@ async def create_lead(lead: LeadInput, customer: dict = Depends(get_current_cust
             """
             email_sent = send_email(lead.email, subject, content)
         
-        # Auto-sync to HubSpot if connected
-        hubspot_synced = False
-        if os.getenv("HUBSPOT_API_KEY"):
-            lead_data_for_hubspot = {
-                "email": lead.email,
-                "first_name": lead.first_name,
-                "last_name": lead.last_name,
-                "company": lead.company,
-                "phone": lead.phone,
-                "qualification_score": 0  # Initial score
-            }
-            hubspot_synced = sync_lead_to_hubspot(lead_data_for_hubspot)
-        
         return {
             "lead_id": lead_id,
             "status": "created",
             "email_sent": email_sent,
-            "hubspot_synced": hubspot_synced,
             "message": "Lead captured successfully!",
             "usage": {
                 "used": customer['leads_used_this_month'] + 1,
