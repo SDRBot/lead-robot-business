@@ -732,4 +732,486 @@ async def dashboard(api_key: str = None):
                 box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-collapse: collapse;
             }}
             th, td {{ padding: 15px; text-align: left; border-bottom: 1px solid #eee; }}
-            th {{ background: #f8f9fa; font
+            th {{ background: #f8f9fa; font-weight: bold; }}
+           .badge {{ 
+               padding: 4px 8px; border-radius: 4px; font-size: 12px;
+               font-weight: bold; text-transform: uppercase;
+           }}
+           .badge.hot {{ background: #ffe6e6; color: #e74c3c; }}
+           .badge.warm {{ background: #fff3e0; color: #f39c12; }}
+           .badge.qualified {{ background: #e3f2fd; color: #3498db; }}
+           .badge.new {{ background: #f8f9fa; color: #666; }}
+           .btn {{ 
+               background: #667eea; color: white; padding: 10px 20px; 
+               border: none; border-radius: 5px; text-decoration: none;
+               display: inline-block; margin: 5px;
+           }}
+           .api-section {{ 
+               background: #e8f5e9; padding: 20px; border-radius: 10px; 
+               margin: 20px 0;
+           }}
+           .api-key {{ 
+               background: #f8f9fa; padding: 10px; border-radius: 5px;
+               font-family: monospace; word-break: break-all; margin: 10px 0;
+           }}
+       </style>
+   </head>
+   <body>
+       <div class="header">
+           <h1>📊 AI Lead Robot Dashboard</h1>
+           <p>Welcome back! Here's how your lead qualification is performing.</p>
+           <p><strong>Plan:</strong> {plan_info['name']} | <strong>Email:</strong> {customer['email']}</p>
+       </div>
+       
+       <div class="metrics">
+           <div class="metric">
+               <h3>Total Leads</h3>
+               <div class="value" style="color: #2ecc71;">{total_leads}</div>
+           </div>
+           <div class="metric">
+               <h3>Qualified Leads</h3>
+               <div class="value" style="color: #e74c3c;">{qualified_leads}</div>
+           </div>
+           <div class="metric">
+               <h3>Conversion Rate</h3>
+               <div class="value" style="color: #3498db;">{round((qualified_leads/max(total_leads,1))*100, 1)}%</div>
+           </div>
+           <div class="metric">
+               <h3>Monthly Usage</h3>
+               <div class="value" style="color: #9b59b6;">{customer['leads_used_this_month']}/{customer['leads_limit']}</div>
+               <div class="usage-bar">
+                   <div class="usage-fill"></div>
+               </div>
+           </div>
+       </div>
+       
+       <div class="api-section">
+           <h3>🔑 Your API Integration</h3>
+           <p><strong>API Key:</strong></p>
+           <div class="api-key">{api_key}</div>
+           
+           <p><strong>Quick Integration Example:</strong></p>
+           <pre style="background: #f1f1f1; padding: 15px; border-radius: 5px; overflow-x: auto;">
+curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
+    -H "Content-Type: application/json" \\
+    -H "Authorization: Bearer {api_key}" \\
+    -d '{{"email": "lead@company.com", "first_name": "John", "company": "Acme Corp"}}'
+           </pre>
+           
+           <a href="/docs" class="btn">📚 Full API Documentation</a>
+           <a href="/test-form?api_key={api_key}" class="btn">🧪 Test Lead Capture</a>
+       </div>
+       
+       <h2>📋 Recent Leads</h2>
+       <table>
+           <tr>
+               <th>Email</th>
+               <th>Name</th>
+               <th>Company</th>
+               <th>Score</th>
+               <th>Stage</th>
+               <th>Created</th>
+           </tr>
+   """
+   
+   for lead in recent_leads:
+       created_date = lead['created_at'][:16] if lead['created_at'] else 'N/A'
+       stage_class = lead['qualification_stage'].replace('_lead', '')
+       
+       html += f"""
+           <tr>
+               <td>{lead['email']}</td>
+               <td>{lead['first_name'] or 'N/A'}</td>
+               <td>{lead['company'] or 'N/A'}</td>
+               <td>{lead['qualification_score']}</td>
+               <td><span class="badge {stage_class}">{lead['qualification_stage'].replace('_', ' ').title()}</span></td>
+               <td>{created_date}</td>
+           </tr>
+       """
+   
+   html += f"""
+       </table>
+       
+       <div style="margin-top: 40px; text-align: center; color: #666;">
+           <p>🤖 Your AI Lead Robot is working 24/7 to qualify your leads!</p>
+           <p><a href="mailto:support@yourcompany.com">Need help? Contact Support</a></p>
+       </div>
+       
+       <script>
+           // Auto-refresh every 5 minutes
+           setTimeout(() => location.reload(), 300000);
+       </script>
+   </body>
+   </html>
+   """
+   
+   return HTMLResponse(html)
+
+@app.get("/test-form", response_class=HTMLResponse)
+async def test_form(api_key: str):
+   """Test lead capture form for customers"""
+   
+   customer = verify_api_key(api_key)
+   if not customer:
+       return HTMLResponse("<h1>Invalid API key</h1>", status_code=401)
+   
+   return f"""
+   <!DOCTYPE html>
+   <html>
+   <head>
+       <title>🧪 Test Lead Capture - AI Lead Robot</title>
+       <style>
+           body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }}
+           .form-container {{ background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }}
+           h1 {{ color: #333; text-align: center; }}
+           .form-group {{ margin-bottom: 20px; }}
+           label {{ display: block; margin-bottom: 5px; font-weight: bold; color: #555; }}
+           input, textarea {{ width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; }}
+           button {{ background: #667eea; color: white; padding: 15px 30px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; width: 100%; }}
+           button:hover {{ background: #5a6fd8; }}
+           .result {{ padding: 15px; border-radius: 5px; margin-top: 20px; }}
+           .success {{ background: #d4edda; color: #155724; }}
+           .error {{ background: #f8d7da; color: #721c24; }}
+       </style>
+   </head>
+   <body>
+       <div class="form-container">
+           <h1>🧪 Test Your Lead Capture</h1>
+           <p>Use this form to test your AI lead qualification system:</p>
+           
+           <form id="testForm">
+               <div class="form-group">
+                   <label>Email Address *</label>
+                   <input type="email" name="email" required placeholder="test@company.com">
+               </div>
+               
+               <div class="form-group">
+                   <label>First Name</label>
+                   <input type="text" name="first_name" placeholder="John">
+               </div>
+               
+               <div class="form-group">
+                   <label>Last Name</label>
+                   <input type="text" name="last_name" placeholder="Smith">
+               </div>
+               
+               <div class="form-group">
+                   <label>Company</label>
+                   <input type="text" name="company" placeholder="Acme Corp">
+               </div>
+               
+               <div class="form-group">
+                   <label>Phone</label>
+                   <input type="tel" name="phone" placeholder="+1234567890">
+               </div>
+               
+               <div class="form-group">
+                   <label>Initial Message (Optional)</label>
+                   <textarea name="initial_message" rows="3" placeholder="Tell us about your biggest challenge..."></textarea>
+               </div>
+               
+               <button type="submit">🚀 Test Lead Qualification</button>
+           </form>
+           
+           <div id="result"></div>
+           
+           <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
+               <p><strong>💡 What happens when you submit:</strong></p>
+               <ol>
+                   <li>Lead gets saved to your database</li>
+                   <li>AI analyzes the information</li>
+                   <li>Welcome email sent automatically</li>
+                   <li>Lead appears in your dashboard</li>
+                   <li>Qualification score calculated</li>
+               </ol>
+           </div>
+           
+           <p style="text-align: center; margin-top: 20px;">
+               <a href="/dashboard?api_key={api_key}" style="color: #667eea;">← Back to Dashboard</a>
+           </p>
+       </div>
+       
+       <script>
+           document.getElementById('testForm').addEventListener('submit', async (e) => {{
+               e.preventDefault();
+               
+               const formData = new FormData(e.target);
+               const data = {{
+                   email: formData.get('email'),
+                   first_name: formData.get('first_name'),
+                   last_name: formData.get('last_name'),
+                   company: formData.get('company'),
+                   phone: formData.get('phone'),
+                   initial_message: formData.get('initial_message'),
+                   source: 'test_form'
+               }};
+               
+               try {{
+                   const response = await fetch('/api/leads', {{
+                       method: 'POST',
+                       headers: {{ 
+                           'Content-Type': 'application/json',
+                           'Authorization': 'Bearer {api_key}'
+                       }},
+                       body: JSON.stringify(data)
+                   }});
+                   
+                   const result = await response.json();
+                   
+                   if (response.ok) {{
+                       document.getElementById('result').innerHTML = 
+                           '<div class="result success">✅ Success! Lead captured and processed. Check your dashboard and email!</div>';
+                       e.target.reset();
+                   }} else {{
+                       throw new Error(result.detail);
+                   }}
+               }} catch (error) {{
+                   document.getElementById('result').innerHTML = 
+                       '<div class="result error">❌ Error: ' + error.message + '</div>';
+               }}
+           }});
+       </script>
+   </body>
+   </html>
+   """
+
+# Protected API endpoints
+@app.post("/api/leads")
+async def create_lead(lead: LeadInput, customer: dict = Depends(get_current_customer)):
+   """Create a new lead (requires API key)"""
+   
+   # Check usage limits
+   if not check_usage_limit(customer['id']):
+       raise HTTPException(
+           status_code=429, 
+           detail=f"Monthly limit of {customer['leads_limit']} leads exceeded"
+       )
+   
+   lead_id = str(uuid.uuid4())
+   
+   try:
+       conn = get_db_connection()
+       cursor = conn.cursor()
+       
+       # Insert lead
+       cursor.execute('''
+           INSERT INTO leads (
+               id, customer_id, email, first_name, last_name, 
+               company, phone, source, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ''', (
+           lead_id, customer['id'], lead.email, lead.first_name, lead.last_name,
+           lead.company, lead.phone, lead.source, datetime.now(), datetime.now()
+       ))
+       
+       # Update usage counter
+       cursor.execute('''
+           UPDATE customers 
+           SET leads_used_this_month = leads_used_this_month + 1, updated_at = ?
+           WHERE id = ?
+       ''', (datetime.now(), customer['id']))
+       
+       # Log analytics
+       cursor.execute('''
+           INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
+           VALUES (?, ?, ?, ?, ?)
+       ''', (
+           str(uuid.uuid4()), customer['id'], "lead_created",
+           json.dumps({"source": lead.source, "email": lead.email}),
+           datetime.now()
+       ))
+       
+       conn.commit()
+       conn.close()
+       
+       # Send welcome email to lead
+       email_sent = False
+       if lead.first_name and SERVICES["sendgrid"]:
+           subject = f"Thanks for your interest, {lead.first_name}!"
+           content = f"""
+           <div style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
+               <h2>Hi {lead.first_name}!</h2>
+               <p>Thanks for your interest! We'd love to learn more about {lead.company or 'your company'}.</p>
+               <p><strong>Quick question:</strong> What's your biggest challenge right now?</p>
+               <p>Just reply to this email and let us know!</p>
+               <p>Best regards,<br>The Team</p>
+           </div>
+           """
+           email_sent = send_email(lead.email, subject, content)
+       
+       return {
+           "lead_id": lead_id,
+           "status": "created",
+           "email_sent": email_sent,
+           "message": "Lead captured successfully!",
+           "usage": {
+               "used": customer['leads_used_this_month'] + 1,
+               "limit": customer['leads_limit']
+           }
+       }
+   
+   except Exception as e:
+       raise HTTPException(status_code=500, detail=f"Error creating lead: {str(e)}")
+
+@app.get("/api/leads")
+async def get_leads(customer: dict = Depends(get_current_customer), skip: int = 0, limit: int = 50):
+   """Get customer's leads"""
+   
+   conn = get_db_connection()
+   cursor = conn.cursor()
+   
+   cursor.execute('''
+       SELECT * FROM leads WHERE customer_id = ?
+       ORDER BY created_at DESC LIMIT ? OFFSET ?
+   ''', (customer['id'], limit, skip))
+   
+   leads = [dict(row) for row in cursor.fetchall()]
+   
+   cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
+   total = cursor.fetchone()[0]
+   
+   conn.close()
+   
+   return {
+       "leads": leads,
+       "total": total,
+       "skip": skip,
+       "limit": limit
+   }
+
+@app.get("/api/analytics")
+async def get_analytics(customer: dict = Depends(get_current_customer)):
+   """Get customer analytics"""
+   
+   conn = get_db_connection()
+   cursor = conn.cursor()
+   
+   # Basic metrics
+   cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
+   total_leads = cursor.fetchone()[0]
+   
+   cursor.execute("""
+       SELECT COUNT(*) FROM leads 
+       WHERE customer_id = ? AND qualification_stage = 'hot_lead'
+   """, (customer['id'],))
+   hot_leads = cursor.fetchone()[0]
+   
+   cursor.execute("""
+       SELECT COUNT(*) FROM leads 
+       WHERE customer_id = ? AND qualification_stage = 'warm_lead'
+   """, (customer['id'],))
+   warm_leads = cursor.fetchone()[0]
+   
+   # Lead sources
+   cursor.execute("""
+       SELECT source, COUNT(*) as count
+       FROM leads WHERE customer_id = ?
+       GROUP BY source ORDER BY count DESC
+   """, (customer['id'],))
+   lead_sources = [{"source": row[0], "count": row[1]} for row in cursor.fetchall()]
+   
+   conn.close()
+   
+   conversion_rate = (hot_leads + warm_leads) / max(total_leads, 1) * 100
+   
+   return {
+       "total_leads": total_leads,
+       "hot_leads": hot_leads,
+       "warm_leads": warm_leads,
+       "conversion_rate": round(conversion_rate, 1),
+       "usage": {
+           "used": customer['leads_used_this_month'],
+           "limit": customer['leads_limit'],
+           "percentage": round((customer['leads_used_this_month'] / customer['leads_limit']) * 100, 1)
+       },
+       "lead_sources": lead_sources
+   }
+
+# Webhook for Stripe
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+   """Handle Stripe webhooks"""
+   
+   payload = await request.body()
+   sig_header = request.headers.get('stripe-signature')
+   endpoint_secret = os.getenv('STRIPE_WEBHOOK_SECRET')
+   
+   if not endpoint_secret:
+       return {"status": "webhook_secret_not_configured"}
+   
+   try:
+       event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
+       
+       if event['type'] == 'invoice.payment_succeeded':
+           # Reset monthly usage counter
+           subscription_id = event['data']['object']['subscription']
+           
+           conn = get_db_connection()
+           cursor = conn.cursor()
+           
+           cursor.execute("""
+               UPDATE customers 
+               SET leads_used_this_month = 0, updated_at = ?
+               WHERE stripe_subscription_id = ?
+           """, (datetime.now(), subscription_id))
+           
+           conn.commit()
+           conn.close()
+           
+       elif event['type'] == 'invoice.payment_failed':
+           # Handle failed payment - could pause service
+           subscription_id = event['data']['object']['subscription']
+           
+           conn = get_db_connection()
+           cursor = conn.cursor()
+           
+           cursor.execute("""
+               UPDATE customers 
+               SET status = 'payment_failed', updated_at = ?
+               WHERE stripe_subscription_id = ?
+           """, (datetime.now(), subscription_id))
+           
+           conn.commit()
+           conn.close()
+           
+       elif event['type'] == 'customer.subscription.deleted':
+           # Handle cancellation
+           subscription_id = event['data']['object']['id']
+           
+           conn = get_db_connection()
+           cursor = conn.cursor()
+           
+           cursor.execute("""
+               UPDATE customers 
+               SET status = 'cancelled', updated_at = ?
+               WHERE stripe_subscription_id = ?
+           """, (datetime.now(), subscription_id))
+           
+           conn.commit()
+           conn.close()
+       
+       return {"status": "success"}
+       
+   except Exception as e:
+       raise HTTPException(status_code=400, detail=str(e))
+
+# Health check
+@app.get("/health")
+def health_check():
+   """Health check endpoint"""
+   return {
+       "status": "healthy",
+       "services": {
+           "openai": "active" if SERVICES["openai"] else "offline",
+           "sendgrid": "active" if SERVICES["sendgrid"] else "offline",
+           "stripe": "active" if stripe.api_key else "offline"
+       },
+       "timestamp": datetime.now().isoformat()
+   }
+
+if __name__ == "__main__":
+   print("🚀 Starting AI Lead Qualification System with Stripe Integration...")
+   print("✅ System ready!")
+   
+   import uvicorn
+   uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
