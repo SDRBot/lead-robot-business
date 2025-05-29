@@ -1022,7 +1022,7 @@ async def home():
         <div class="plans">
             <div class="plan">
                 <h3>Starter Plan</h3>
-                <div class="price">$99<span style="font-size: 0.4em;">/mo</span></div>
+                <div class="price">£99<span style="font-size: 0.4em;">/mo</span></div>
                 <ul class="features-list">
                     <li>500 leads per month</li>
                     <li>AI-powered qualification</li>
@@ -1035,7 +1035,7 @@ async def home():
             
             <div class="plan popular">
                 <h3>Professional Plan</h3>
-                <div class="price">$299<span style="font-size: 0.4em;">/mo</span></div>
+                <div class="price">£299<span style="font-size: 0.4em;">/mo</span></div>
                 <ul class="features-list">
                     <li>2,000 leads per month</li>
                     <li>Everything in Starter</li>
@@ -1191,7 +1191,7 @@ async def payment_success(session_id: str, request: Request):
                     <p>You won't be charged until your trial ends. Cancel anytime.</p>
                 </div>
                 
-                <p><strong>Plan:</strong> {plan_info['name']} (${plan_info['price']}/month after trial)</p>
+                <p><strong>Plan:</strong> {plan_info['name']} (£{plan_info['price']}/month after trial)</p>
                 <p><strong>Monthly Limit:</strong> {plan_info['leads_limit']} leads</p>
                 <p><strong>Email:</strong> {payment_info['customer_email']}</p>
                 
