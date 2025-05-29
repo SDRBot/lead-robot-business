@@ -141,9 +141,13 @@ def init_services():
     try:
         openai_key = os.getenv("OPENAI_API_KEY")
         if openai_key:
-            from openai import OpenAI
-            services["openai"] = OpenAI(api_key=openai_key)
-            print("✅ OpenAI initialized successfully")
+            # Import here to avoid dependency issues
+            try:
+                from openai import OpenAI
+                services["openai"] = OpenAI(api_key=openai_key)
+                print("✅ OpenAI initialized successfully")
+            except ImportError:
+                print("⚠️ OpenAI package not installed - pip install openai")
         else:
             print("⚠️ OPENAI_API_KEY not set")
     except Exception as e:
@@ -153,9 +157,12 @@ def init_services():
     try:
         sendgrid_key = os.getenv("SENDGRID_API_KEY")
         if sendgrid_key:
-            from sendgrid import SendGridAPIClient
-            services["sendgrid"] = SendGridAPIClient(api_key=sendgrid_key)
-            print("✅ SendGrid initialized successfully")
+            try:
+                from sendgrid import SendGridAPIClient
+                services["sendgrid"] = SendGridAPIClient(api_key=sendgrid_key)
+                print("✅ SendGrid initialized successfully")
+            except ImportError:
+                print("⚠️ SendGrid package not installed - pip install sendgrid")
         else:
             print("⚠️ SENDGRID_API_KEY not set")
     except Exception as e:
@@ -307,57 +314,37 @@ curl -X POST "https://your-domain.onrender.com/api/leads" \\
 
 # Stripe functions
 def create_checkout_session(plan: str, success_url: str, cancel_url: str):
-    """Create Stripe checkout session with better error handling"""
+    """Create Stripe checkout session with detailed error handling"""
+    
+    print(f"🔧 Creating checkout session for plan: {plan}")
+    print(f"🔧 Stripe API key exists: {bool(stripe.api_key)}")
+    print(f"🔧 Stripe API key prefix: {stripe.api_key[:7] if stripe.api_key else 'None'}")
     
     if plan not in PRICING_PLANS:
         raise HTTPException(status_code=404, detail="Plan not found")
     
     plan_info = PRICING_PLANS[plan]
+    print(f"🔧 Plan info: {plan_info}")
     
     try:
-        # First, create a product if it doesn't exist
-        products = stripe.Product.list(limit=100)
-        product_name = f"AI Lead Robot - {plan_info['name']}"
+        # Test Stripe connection first
+        print("🔧 Testing Stripe connection...")
+        account = stripe.Account.retrieve()
+        print(f"✅ Stripe connected to account: {account.id}")
         
-        existing_product = None
-        for product in products['data']:
-            if product['name'] == product_name:
-                existing_product = product
-                break
-        
-        if not existing_product:
-            product = stripe.Product.create(
-                name=product_name,
-                description=plan_info['description']
-            )
-        else:
-            product = existing_product
-        
-        # Create or get price
-        prices = stripe.Price.list(product=product['id'], limit=100)
-        existing_price = None
-        
-        for price in prices['data']:
-            if (price['unit_amount'] == plan_info['price'] * 100 and 
-                price['recurring']['interval'] == 'month'):
-                existing_price = price
-                break
-        
-        if not existing_price:
-            price = stripe.Price.create(
-                product=product['id'],
-                unit_amount=plan_info['price'] * 100,
-                currency='usd',
-                recurring={'interval': 'month'}
-            )
-        else:
-            price = existing_price
-        
-        # Create checkout session
+        print("🔧 Creating checkout session...")
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
-                'price': price['id'],
+                'price_data': {
+                    'currency': 'usd',
+                    'product_data': {
+                        'name': f"AI Lead Robot - {plan_info['name']}",
+                        'description': f"{plan_info['description']} - {plan_info['leads_limit']} leads/month",
+                    },
+                    'unit_amount': plan_info['price'] * 100,
+                    'recurring': {'interval': 'month'}
+                },
                 'quantity': 1,
             }],
             mode='subscription',
@@ -365,20 +352,26 @@ def create_checkout_session(plan: str, success_url: str, cancel_url: str):
             cancel_url=cancel_url,
             metadata={'plan': plan},
             allow_promotion_codes=True,
-            billing_address_collection='required',
-            customer_email=None,  # Let customer enter their email
         )
         
-        print(f"✅ Created checkout session: {checkout_session.id}")
+        print(f"✅ Checkout session created: {checkout_session.id}")
+        print(f"✅ Checkout URL: {checkout_session.url}")
         return checkout_session.url
         
+    except stripe.error.AuthenticationError as e:
+        print(f"❌ Stripe Authentication Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Stripe authentication failed: {str(e)}")
+    except stripe.error.InvalidRequestError as e:
+        print(f"❌ Stripe Invalid Request Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Stripe request error: {str(e)}")
     except stripe.error.StripeError as e:
-        print(f"❌ Stripe error: {str(e)}")
+        print(f"❌ Stripe Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
     except Exception as e:
-        print(f"❌ General error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating checkout: {str(e)}")
-        
+        print(f"❌ General Error: {str(e)}")
+        print(f"❌ Error type: {type(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 def handle_successful_payment(session_id: str):
     """Handle successful payment with better error handling"""
     
@@ -389,7 +382,7 @@ def handle_successful_payment(session_id: str):
             expand=['customer', 'subscription']
         )
         
-        print(f"Retrieved session: {session}")
+        print(f"Retrieved session: {session.id}")
         
         if not session.customer_details or not session.customer_details.email:
             raise HTTPException(status_code=400, detail="No customer email found")
@@ -618,22 +611,64 @@ async def home():
     </html>
     """
 
+@app.get("/debug/stripe")
+async def debug_stripe():
+    """Debug Stripe configuration"""
+    
+    try:
+        # Test Stripe connection
+        account = stripe.Account.retrieve()
+        
+        return {
+            "stripe_configured": True,
+            "account_id": account.id,
+            "country": account.country,
+            "has_secret_key": bool(os.getenv("STRIPE_SECRET_KEY")),
+            "has_webhook_secret": bool(os.getenv("STRIPE_WEBHOOK_SECRET")),
+            "api_key_prefix": os.getenv("STRIPE_SECRET_KEY", "")[:7] if os.getenv("STRIPE_SECRET_KEY") else "None"
+        }
+    except Exception as e:
+        return {
+            "stripe_configured": False,
+            "error": str(e),
+            "has_secret_key": bool(os.getenv("STRIPE_SECRET_KEY")),
+            "has_webhook_secret": bool(os.getenv("STRIPE_WEBHOOK_SECRET"))
+        }
+
 @app.get("/checkout/{plan}")
 async def checkout(plan: str, request: Request):
-    """Create Stripe checkout session"""
+    """Create Stripe checkout session with debugging"""
+    
+    print(f"🛒 Checkout requested for plan: {plan}")
+    
+    if plan not in PRICING_PLANS:
+        raise HTTPException(status_code=404, detail=f"Plan '{plan}' not found")
     
     base_url = str(request.base_url).rstrip('/')
     success_url = f"{base_url}/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{base_url}/#pricing"
     
+    print(f"📍 Success URL: {success_url}")
+    print(f"📍 Cancel URL: {cancel_url}")
+    
     try:
         checkout_url = create_checkout_session(plan, success_url, cancel_url)
+        print(f"✅ Redirecting to: {checkout_url}")
         return RedirectResponse(url=checkout_url, status_code=303)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"❌ Checkout error: {str(e)}")
+        return HTMLResponse(f"""
+        <div style="text-align: center; font-family: Arial; margin: 100px;">
+            <h1>❌ Checkout Error</h1>
+            <p>Error: {str(e)}</p>
+            <p><strong>Plan:</strong> {plan}</p>
+            <p><strong>Stripe Key:</strong> {'Set' if os.getenv('STRIPE_SECRET_KEY') else 'Missing'}</p>
+            <a href="/">← Back to Home</a>
+        </div>
+        """, status_code=500)
 
 @app.get("/success", response_class=HTMLResponse)
-async def payment_success(session_id: str):
+async def payment_success(session_id: str, request: Request):
     """Payment success page"""
     
     try:
@@ -722,94 +757,96 @@ def payment_cancelled():
         <h1>😞 Payment Cancelled</h1>
         <p>No problem! You can start your free trial anytime.</p>
         <a href="/#pricing" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">
-            ← Back to Pricing
-        </a>
-    </div>
-    """
+           ← Back to Pricing
+       </a>
+   </div>
+   """
 
 # Customer dashboard
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(api_key: str = None):
-    """Customer dashboard"""
-    
-    if not api_key:
-        return HTMLResponse("""
-        <div style="text-align: center; font-family: Arial; margin: 100px;">
-            <h1>🔐 Dashboard Access Required</h1>
-            <p>Please provide your API key to access your dashboard.</p>
-            <form method="get">
-                <input type="text" name="api_key" placeholder="Enter your API key" style="padding: 10px; width: 300px;">
-                <button type="submit" style="padding: 10px 20px; background: #667eea; color: white; border: none;">Access Dashboard</button>
-            </form>
-        </div>
-        """)
-    
-    customer = verify_api_key(api_key)
-    if not customer:
-        return HTMLResponse("<h1>Invalid API key</h1>", status_code=401)
-    
-    # Get customer stats
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
-    total_leads = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM leads 
-        WHERE customer_id = ? AND qualification_stage IN ('hot_lead', 'warm_lead')
-    """, (customer['id'],))
-    qualified_leads = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT * FROM leads WHERE customer_id = ? 
-        ORDER BY created_at DESC LIMIT 10
-    """, (customer['id'],))
-    recent_leads = [dict(row) for row in cursor.fetchall()]
-    
-    conn.close()
-    
-    plan_info = PRICING_PLANS[customer['plan']]
-    usage_percent = (customer['leads_used_this_month'] / customer['leads_limit']) * 100
-    
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>📊 Dashboard - AI Lead Robot</title>
-        <style>
-            body {{ 
-                font-family: Arial, sans-serif; margin: 0; padding: 20px; 
-                background: #f5f7fa; max-width: 1200px; margin: 0 auto;
-            }}
-            .header {{ 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px;
-            }}
-            .metrics {{ 
-                display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 20px; margin-bottom: 30px;
-            }}
-            .metric {{ 
-                background: white; padding: 25px; border-radius: 10px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center;
-            }}
-            .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; }}
-            .metric .value {{ font-size: 32px; font-weight: bold; margin: 0; }}
-            .usage-bar {{ 
-                background: #e9ecef; height: 20px; border-radius: 10px; 
-                overflow: hidden; margin: 10px 0;
-            }}
-            .usage-fill {{ 
-                background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
-                height: 100%; width: {min(usage_percent, 100)}%;
-            }}
-            table {{ 
-                width: 100%; background: white; border-radius: 10px; 
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-collapse: collapse;
-            }}
-            th, td {{ padding: 15px; text-align: left; border-bottom: 1px solid #eee; }}
-            th {{ background: #f8f9fa; font-weight: bold; }}
+async def dashboard(api_key: str = None, request: Request = None):
+   """Customer dashboard"""
+   
+   if not api_key:
+       return HTMLResponse("""
+       <div style="text-align: center; font-family: Arial; margin: 100px;">
+           <h1>🔐 Dashboard Access Required</h1>
+           <p>Please provide your API key to access your dashboard.</p>
+           <form method="get">
+               <input type="text" name="api_key" placeholder="Enter your API key" style="padding: 10px; width: 300px;">
+               <button type="submit" style="padding: 10px 20px; background: #667eea; color: white; border: none;">Access Dashboard</button>
+           </form>
+       </div>
+       """)
+   
+   customer = verify_api_key(api_key)
+   if not customer:
+       return HTMLResponse("<h1>Invalid API key</h1>", status_code=401)
+   
+   # Get customer stats
+   conn = get_db_connection()
+   cursor = conn.cursor()
+   
+   cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
+   total_leads = cursor.fetchone()[0]
+   
+   cursor.execute("""
+       SELECT COUNT(*) FROM leads 
+       WHERE customer_id = ? AND qualification_stage IN ('hot_lead', 'warm_lead')
+   """, (customer['id'],))
+   qualified_leads = cursor.fetchone()[0]
+   
+   cursor.execute("""
+       SELECT * FROM leads WHERE customer_id = ? 
+       ORDER BY created_at DESC LIMIT 10
+   """, (customer['id'],))
+   recent_leads = [dict(row) for row in cursor.fetchall()]
+   
+   conn.close()
+   
+   plan_info = PRICING_PLANS[customer['plan']]
+   usage_percent = (customer['leads_used_this_month'] / customer['leads_limit']) * 100
+   
+   base_url = str(request.base_url).rstrip('/') if request else ""
+   
+   html = f"""
+   <!DOCTYPE html>
+   <html>
+   <head>
+       <title>📊 Dashboard - AI Lead Robot</title>
+       <style>
+           body {{ 
+               font-family: Arial, sans-serif; margin: 0; padding: 20px; 
+               background: #f5f7fa; max-width: 1200px; margin: 0 auto;
+           }}
+           .header {{ 
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px;
+           }}
+           .metrics {{ 
+               display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+               gap: 20px; margin-bottom: 30px;
+           }}
+           .metric {{ 
+               background: white; padding: 25px; border-radius: 10px;
+               box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center;
+           }}
+           .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; }}
+           .metric .value {{ font-size: 32px; font-weight: bold; margin: 0; }}
+           .usage-bar {{ 
+               background: #e9ecef; height: 20px; border-radius: 10px; 
+               overflow: hidden; margin: 10px 0;
+           }}
+           .usage-fill {{ 
+               background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
+               height: 100%; width: {min(usage_percent, 100)}%;
+           }}
+           table {{ 
+               width: 100%; background: white; border-radius: 10px; 
+               box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-collapse: collapse;
+           }}
+           th, td {{ padding: 15px; text-align: left; border-bottom: 1px solid #eee; }}
+           th {{ background: #f8f9fa; font-weight: bold; }}
            .badge {{ 
                padding: 4px 8px; border-radius: 4px; font-size: 12px;
                font-weight: bold; text-transform: uppercase;
@@ -869,7 +906,7 @@ async def dashboard(api_key: str = None):
            
            <p><strong>Quick Integration Example:</strong></p>
            <pre style="background: #f1f1f1; padding: 15px; border-radius: 5px; overflow-x: auto;">
-curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
+curl -X POST "{base_url}/api/leads" \\
     -H "Content-Type: application/json" \\
     -H "Authorization: Bearer {api_key}" \\
     -d '{{"email": "lead@company.com", "first_name": "John", "company": "Acme Corp"}}'
@@ -891,7 +928,7 @@ curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
            </tr>
    """
    
-    for lead in recent_leads:
+   for lead in recent_leads:
        created_date = lead['created_at'][:16] if lead['created_at'] else 'N/A'
        stage_class = lead['qualification_stage'].replace('_lead', '')
        
@@ -906,7 +943,7 @@ curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
            </tr>
        """
    
-    html += f"""
+   html += f"""
        </table>
        
        <div style="margin-top: 40px; text-align: center; color: #666;">
@@ -922,10 +959,10 @@ curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
    </html>
    """
    
-    return HTMLResponse(html)
+   return HTMLResponse(html)
 
 @app.get("/test-form", response_class=HTMLResponse)
-async def test_form(api_key: str):
+async def test_form(api_key: str, request: Request):
    """Test lead capture form for customers"""
    
    customer = verify_api_key(api_key)
@@ -956,7 +993,7 @@ async def test_form(api_key: str):
            <h1>🧪 Test Your Lead Capture</h1>
            <p>Use this form to test your AI lead qualification system:</p>
            
-            <form id="testForm">
+           <form id="testForm">
                <div class="form-group">
                    <label>Email Address *</label>
                    <input type="email" name="email" required placeholder="test@company.com">
