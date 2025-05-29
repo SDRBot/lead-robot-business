@@ -125,7 +125,12 @@ def init_database():
             FOREIGN KEY (customer_id) REFERENCES customers (id)
         )
     ''')
-    
+    try:
+        cursor.execute("ALTER TABLE customers ADD COLUMN password_hash TEXT")
+        print("✅ Added password column")
+    except sqlite3.OperationalError:
+        print("⚠️ Password column already exists")
+        
     conn.commit()
     conn.close()
     print("✅ Database initialized successfully")
@@ -632,7 +637,7 @@ def handle_successful_payment(session_id: str):
                     customer_id, customer_email, stripe_customer_id, stripe_subscription_id,
                     plan, api_key, plan_info['leads_limit'], 'active', datetime.now(), datetime.now()
                 ))
-                
+
             # Log the signup
             cursor.execute("""
                 INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
@@ -1768,202 +1773,262 @@ async def forgot_key_api(request: Request):
 # Customer dashboard
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(api_key: str = None, request: Request = None):
-   """Customer dashboard"""
-   
-   if not api_key:
-       return HTMLResponse("""
-       <div style="text-align: center; font-family: Arial; margin: 100px;">
-           <h1>🔐 Dashboard Access Required</h1>
-           <p>Please provide your API key to access your dashboard.</p>
-           <form method="get">
-               <input type="text" name="api_key" placeholder="Enter your API key" style="padding: 10px; width: 300px;">
-               <button type="submit" style="padding: 10px 20px; background: #667eea; color: white; border: none;">Access Dashboard</button>
-           </form>
-       </div>
-       """)
-   
-   customer = verify_api_key(api_key)
-   if not customer:
-       return HTMLResponse("<h1>Invalid API key</h1>", status_code=401)
-   
-   # Get customer stats
-   conn = get_db_connection()
-   cursor = conn.cursor()
-   
-   cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
-   total_leads = cursor.fetchone()[0]
-   
-   cursor.execute("""
-       SELECT COUNT(*) FROM leads 
-       WHERE customer_id = ? AND qualification_stage IN ('hot_lead', 'warm_lead')
-   """, (customer['id'],))
-   qualified_leads = cursor.fetchone()[0]
-   
-   cursor.execute("""
-       SELECT * FROM leads WHERE customer_id = ? 
-       ORDER BY created_at DESC LIMIT 10
-   """, (customer['id'],))
-   recent_leads = [dict(row) for row in cursor.fetchall()]
-   
-   conn.close()
-   
-   plan_info = PRICING_PLANS[customer['plan']]
-   usage_percent = (customer['leads_used_this_month'] / customer['leads_limit']) * 100
-   
-   base_url = str(request.base_url).rstrip('/') if request else ""
-   
-   html = f"""
-   <!DOCTYPE html>
-   <html>
-   <head>
-       <title>📊 Dashboard - AI Lead Robot</title>
-       <style>
-           body {{ 
-               font-family: Arial, sans-serif; margin: 0; padding: 20px; 
-               background: #f5f7fa; max-width: 1200px; margin: 0 auto;
-           }}
-           .header {{ 
-               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-               color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px;
-           }}
-           .metrics {{ 
-               display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-               gap: 20px; margin-bottom: 30px;
-           }}
-           .metric {{ 
-               background: white; padding: 25px; border-radius: 10px;
-               box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center;
-           }}
-           .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; }}
-           .metric .value {{ font-size: 32px; font-weight: bold; margin: 0; }}
-           .usage-bar {{ 
-               background: #e9ecef; height: 20px; border-radius: 10px; 
-               overflow: hidden; margin: 10px 0;
-           }}
-           .usage-fill {{ 
-               background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
-               height: 100%; width: {min(usage_percent, 100)}%;
-           }}
-           table {{ 
-               width: 100%; background: white; border-radius: 10px; 
-               box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-collapse: collapse;
-           }}
-           th, td {{ padding: 15px; text-align: left; border-bottom: 1px solid #eee; }}
-           th {{ background: #f8f9fa; font-weight: bold; }}
-           .badge {{ 
-               padding: 4px 8px; border-radius: 4px; font-size: 12px;
-               font-weight: bold; text-transform: uppercase;
-           }}
-           .badge.hot {{ background: #ffe6e6; color: #e74c3c; }}
-           .badge.warm {{ background: #fff3e0; color: #f39c12; }}
-           .badge.qualified {{ background: #e3f2fd; color: #3498db; }}
-           .badge.new {{ background: #f8f9fa; color: #666; }}
-           .btn {{ 
-               background: #667eea; color: white; padding: 10px 20px; 
-               border: none; border-radius: 5px; text-decoration: none;
-               display: inline-block; margin: 5px;
-           }}
-           .api-section {{ 
-               background: #e8f5e9; padding: 20px; border-radius: 10px; 
-               margin: 20px 0;
-           }}
-           .api-key {{ 
-               background: #f8f9fa; padding: 10px; border-radius: 5px;
-               font-family: monospace; word-break: break-all; margin: 10px 0;
-           }}
-       </style>
-   </head>
-   <body>
-       <div class="header">
-           <h1>📊 AI Lead Robot Dashboard</h1>
-           <p>Welcome back! Here's how your lead qualification is performing.</p>
-           <p><strong>Plan:</strong> {plan_info['name']} | <strong>Email:</strong> {customer['email']}</p>
-       </div>
-       
-       <div class="metrics">
-           <div class="metric">
-               <h3>Total Leads</h3>
-               <div class="value" style="color: #2ecc71;">{total_leads}</div>
-           </div>
-           <div class="metric">
-               <h3>Qualified Leads</h3>
-               <div class="value" style="color: #e74c3c;">{qualified_leads}</div>
-           </div>
-           <div class="metric">
-               <h3>Conversion Rate</h3>
-               <div class="value" style="color: #3498db;">{round((qualified_leads/max(total_leads,1))*100, 1)}%</div>
-           </div>
-           <div class="metric">
-               <h3>Monthly Usage</h3>
-               <div class="value" style="color: #9b59b6;">{customer['leads_used_this_month']}/{customer['leads_limit']}</div>
-               <div class="usage-bar">
-                   <div class="usage-fill"></div>
-               </div>
-           </div>
-       </div>
-       
-       <div class="api-section">
-           <h3>🔑 Your API Integration</h3>
-           <p><strong>API Key:</strong></p>
-           <div class="api-key">{api_key}</div>
-           
-           <p><strong>Quick Integration Example:</strong></p>
-           <pre style="background: #f1f1f1; padding: 15px; border-radius: 5px; overflow-x: auto;">
+    """Customer dashboard with dark mode"""
+    
+    if not api_key:
+        return HTMLResponse("""
+        <div style="text-align: center; font-family: Arial; margin: 100px;">
+            <h1>🔐 Dashboard Access Required</h1>
+            <p>Please provide your API key to access your dashboard.</p>
+            <form method="get">
+                <input type="text" name="api_key" placeholder="Enter your API key" style="padding: 10px; width: 300px;">
+                <button type="submit" style="padding: 10px 20px; background: #667eea; color: white; border: none;">Access Dashboard</button>
+            </form>
+        </div>
+        """)
+    
+    customer = verify_api_key(api_key)
+    if not customer:
+        return HTMLResponse("<h1>Invalid API key</h1>", status_code=401)
+    
+    # Get customer stats
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
+    total_leads = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM leads 
+        WHERE customer_id = ? AND qualification_stage IN ('hot_lead', 'warm_lead')
+    """, (customer['id'],))
+    qualified_leads = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT * FROM leads WHERE customer_id = ? 
+        ORDER BY created_at DESC LIMIT 10
+    """, (customer['id'],))
+    recent_leads = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    
+    plan_info = PRICING_PLANS[customer['plan']]
+    usage_percent = (customer['leads_used_this_month'] / customer['leads_limit']) * 100
+    
+    base_url = str(request.base_url).rstrip('/') if request else ""
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>📊 Dashboard - AI Lead Robot</title>
+        <style>
+            :root {{
+                --bg-color: #f5f7fa;
+                --card-bg: white;
+                --text-color: #333;
+                --header-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                --border-color: #eee;
+                --shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }}
+            
+            [data-theme="dark"] {{
+                --bg-color: #1a1a1a;
+                --card-bg: #2d2d2d;
+                --text-color: #e0e0e0;
+                --header-bg: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+                --border-color: #4a5568;
+                --shadow: 0 2px 10px rgba(0,0,0,0.3);
+            }}
+            
+            body {{ 
+                font-family: Arial, sans-serif; margin: 0; padding: 20px; 
+                background: var(--bg-color); max-width: 1200px; margin: 0 auto;
+                color: var(--text-color); transition: all 0.3s ease;
+            }}
+            .header {{ 
+                background: var(--header-bg);
+                color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px;
+                position: relative;
+            }}
+            .theme-toggle {{
+                position: absolute; top: 20px; right: 20px;
+                background: rgba(255,255,255,0.2); border: none; color: white;
+                padding: 10px; border-radius: 50px; cursor: pointer;
+                font-size: 18px; transition: all 0.3s ease;
+            }}
+            .theme-toggle:hover {{ background: rgba(255,255,255,0.3); }}
+            .metrics {{ 
+                display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px; margin-bottom: 30px;
+            }}
+            .metric {{ 
+                background: var(--card-bg); padding: 25px; border-radius: 10px;
+                box-shadow: var(--shadow); text-align: center;
+                transition: all 0.3s ease;
+            }}
+            .metric:hover {{ transform: translateY(-2px); }}
+            .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; }}
+            .metric .value {{ font-size: 32px; font-weight: bold; margin: 0; }}
+            .usage-bar {{ 
+                background: #e9ecef; height: 20px; border-radius: 10px; 
+                overflow: hidden; margin: 10px 0;
+            }}
+            .usage-fill {{ 
+                background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
+                height: 100%; width: {min(usage_percent, 100)}%;
+                transition: width 0.5s ease;
+            }}
+            table {{ 
+                width: 100%; background: var(--card-bg); border-radius: 10px; 
+                box-shadow: var(--shadow); border-collapse: collapse;
+                transition: all 0.3s ease;
+            }}
+            th, td {{ padding: 15px; text-align: left; border-bottom: 1px solid var(--border-color); }}
+            th {{ background: var(--card-bg); font-weight: bold; }}
+            .badge {{ 
+                padding: 4px 8px; border-radius: 4px; font-size: 12px;
+                font-weight: bold; text-transform: uppercase;
+            }}
+            .badge.hot {{ background: #ffe6e6; color: #e74c3c; }}
+            .badge.warm {{ background: #fff3e0; color: #f39c12; }}
+            .badge.qualified {{ background: #e3f2fd; color: #3498db; }}
+            .badge.new {{ background: #f8f9fa; color: #666; }}
+            .btn {{ 
+                background: #667eea; color: white; padding: 10px 20px; 
+                border: none; border-radius: 5px; text-decoration: none;
+                display: inline-block; margin: 5px; transition: all 0.3s ease;
+            }}
+            .btn:hover {{ background: #5a6fd8; transform: translateY(-1px); }}
+            .api-section {{ 
+                background: #e8f5e9; padding: 20px; border-radius: 10px; 
+                margin: 20px 0; transition: all 0.3s ease;
+            }}
+            [data-theme="dark"] .api-section {{ background: #2a4132; }}
+            .api-key {{ 
+                background: #f8f9fa; padding: 10px; border-radius: 5px;
+                font-family: monospace; word-break: break-all; margin: 10px 0;
+                transition: all 0.3s ease;
+            }}
+            [data-theme="dark"] .api-key {{ background: #3a3a3a; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <button class="theme-toggle" onclick="toggleTheme()" id="themeToggle">🌙</button>
+            <h1>📊 AI Lead Robot Dashboard</h1>
+            <p>Welcome back! Here's how your lead qualification is performing.</p>
+            <p><strong>Plan:</strong> {plan_info['name']} | <strong>Email:</strong> {customer['email']}</p>
+        </div>
+        
+        <div class="metrics">
+            <div class="metric">
+                <h3>Total Leads</h3>
+                <div class="value" style="color: #2ecc71;">{total_leads}</div>
+            </div>
+            <div class="metric">
+                <h3>Qualified Leads</h3>
+                <div class="value" style="color: #e74c3c;">{qualified_leads}</div>
+            </div>
+            <div class="metric">
+                <h3>Conversion Rate</h3>
+                <div class="value" style="color: #3498db;">{round((qualified_leads/max(total_leads,1))*100, 1)}%</div>
+            </div>
+            <div class="metric">
+                <h3>Monthly Usage</h3>
+                <div class="value" style="color: #9b59b6;">{customer['leads_used_this_month']}/{customer['leads_limit']}</div>
+                <div class="usage-bar">
+                    <div class="usage-fill"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="api-section">
+            <h3>🔑 Your API Integration</h3>
+            <p><strong>API Key:</strong></p>
+            <div class="api-key">{api_key}</div>
+            
+            <p><strong>Quick Integration Example:</strong></p>
+            <pre style="background: #f1f1f1; padding: 15px; border-radius: 5px; overflow-x: auto;">
 curl -X POST "{base_url}/api/leads" \\
-    -H "Content-Type: application/json" \\
-    -H "Authorization: Bearer {api_key}" \\
-    -d '{{"email": "lead@company.com", "first_name": "John", "company": "Acme Corp"}}'
-           </pre>
-           
-           <a href="/docs" class="btn">📚 Full API Documentation</a>
-           <a href="/test-form?api_key={api_key}" class="btn">🧪 Test Lead Capture</a>
-           <a href="/integrations?api_key={api_key}" class="btn">🔗 Integrations</a>
-       </div>
-       
-       <h2>📋 Recent Leads</h2>
-       <table>
-           <tr>
-               <th>Email</th>
-               <th>Name</th>
-               <th>Company</th>
-               <th>Score</th>
-               <th>Stage</th>
-               <th>Created</th>
-           </tr>
-   """
-   
-   for lead in recent_leads:
-       created_date = lead['created_at'][:16] if lead['created_at'] else 'N/A'
-       stage_class = lead['qualification_stage'].replace('_lead', '')
-       
-       html += f"""
-           <tr>
-               <td>{lead['email']}</td>
-               <td>{lead['first_name'] or 'N/A'}</td>
-               <td>{lead['company'] or 'N/A'}</td>
-               <td>{lead['qualification_score']}</td>
-               <td><span class="badge {stage_class}">{lead['qualification_stage'].replace('_', ' ').title()}</span></td>
-               <td>{created_date}</td>
-           </tr>
-       """
-   
-   html += f"""
-       </table>
-       
-       <div style="margin-top: 40px; text-align: center; color: #666;">
-           <p>🤖 Your AI Lead Robot is working 24/7 to qualify your leads!</p>
-           <p><a href="mailto:support@yourcompany.com">Need help? Contact Support</a></p>
-       </div>
-       
-       <script>
-           // Auto-refresh every 5 minutes
-           setTimeout(() => location.reload(), 300000);
-       </script>
-   </body>
-   </html>
-   """
-   
-   return HTMLResponse(html)
+     -H "Content-Type: application/json" \\
+     -H "Authorization: Bearer {api_key}" \\
+     -d '{{"email": "lead@company.com", "first_name": "John", "company": "Acme Corp"}}'
+            </pre>
+            
+            <a href="/docs" class="btn">📚 Full API Documentation</a>
+            <a href="/test-form?api_key={api_key}" class="btn">🧪 Test Lead Capture</a>
+            <a href="/integrations?api_key={api_key}" class="btn">🔗 Integrations</a>
+        </div>
+        
+        <h2>📋 Recent Leads</h2>
+        <table>
+            <tr>
+                <th>Email</th>
+                <th>Name</th>
+                <th>Company</th>
+                <th>Score</th>
+                <th>Stage</th>
+                <th>Created</th>
+            </tr>
+    """
+    
+    for lead in recent_leads:
+        created_date = lead['created_at'][:16] if lead['created_at'] else 'N/A'
+        stage_class = lead['qualification_stage'].replace('_lead', '')
+        
+        html += f"""
+            <tr>
+                <td>{lead['email']}</td>
+                <td>{lead['first_name'] or 'N/A'}</td>
+                <td>{lead['company'] or 'N/A'}</td>
+                <td>{lead['qualification_score']}</td>
+                <td><span class="badge {stage_class}">{lead['qualification_stage'].replace('_', ' ').title()}</span></td>
+                <td>{created_date}</td>
+            </tr>
+        """
+    
+    html += f"""
+        </table>
+        
+        <div style="margin-top: 40px; text-align: center; color: #666;">
+            <p>🤖 Your AI Lead Robot is working 24/7 to qualify your leads!</p>
+            <p><a href="mailto:support@yourcompany.com">Need help? Contact Support</a></p>
+            <p><a href="/login">🔓 Logout</a></p>
+        </div>
+        
+        <script>
+            // Theme toggle functionality
+            function toggleTheme() {{
+                const body = document.body;
+                const themeToggle = document.getElementById('themeToggle');
+                
+                if (body.getAttribute('data-theme') === 'dark') {{
+                    body.removeAttribute('data-theme');
+                    themeToggle.textContent = '🌙';
+                    localStorage.setItem('theme', 'light');
+                }} else {{
+                    body.setAttribute('data-theme', 'dark');
+                    themeToggle.textContent = '☀️';
+                    localStorage.setItem('theme', 'dark');
+                }}
+            }}
+            
+            // Load saved theme
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark') {{
+                document.body.setAttribute('data-theme', 'dark');
+                document.getElementById('themeToggle').textContent = '☀️';
+            }}
+            
+            // Auto-refresh every 5 minutes
+            setTimeout(() => location.reload(), 300000);
+        </script>
+    </body>
+    </html>
+    """
+    
+    return HTMLResponse(html)
 
 @app.get("/test-form", response_class=HTMLResponse)
 async def test_form(api_key: str, request: Request):
