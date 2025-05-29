@@ -134,6 +134,9 @@ def init_database():
     conn.commit()
     conn.close()
 
+def analyze_lead_response(message: str, conversation_history: list) -> Dict[str, Any]:
+    """Use OpenAI to analyze lead responses and extract qualification data"""
+    
 # AI Analysis Functions
 if not openai_client:
         print("⚠️ OpenAI not available, using default analysis")
@@ -215,6 +218,20 @@ def generate_personalized_response(lead_data: dict, analysis: dict, conversation
     lead_name = lead_data.get('first_name', 'there')
     company = lead_data.get('company', 'your company')
     
+    # Check if OpenAI is available
+    if not openai_client:
+        print("⚠️ OpenAI not available, using template response")
+        return f"""Hi {lead_name},
+
+Thanks for your response! I'd love to learn more about {company} and how we might be able to help.
+
+{analysis.get('next_question', 'Could you tell me more about your current challenges?')}
+
+Looking forward to hearing from you!
+
+Best regards,
+Your AI Assistant"""
+        
     conversation_context = "\n".join([
         f"{msg['sender']}: {msg['content']}" 
         for msg in conversation_history[-3:]
@@ -343,13 +360,17 @@ def determine_qualification_stage(score: int, analysis: dict) -> str:
     else:
         return "unqualified"
 
-# Email functions
 async def send_email(to_email: str, subject: str, content: str) -> bool:
     """Send email using SendGrid"""
     
+    # Check if SendGrid is available
+    if not sendgrid_client:
+        print(f"⚠️ SendGrid not available, would send email to {to_email}: {subject}")
+        return False
+    
     try:
         message = Mail(
-            from_email=os.getenv("FROM_EMAIL"),
+            from_email=os.getenv("FROM_EMAIL", "hello@yourcompany.com"),
             to_emails=to_email,
             subject=subject,
             html_content=content
@@ -361,7 +382,7 @@ async def send_email(to_email: str, subject: str, content: str) -> bool:
     except Exception as e:
         print(f"Email sending error: {e}")
         return False
-
+    
 async def send_initial_welcome_email(lead_data: dict) -> bool:
     """Send initial welcome email to new leads"""
     
