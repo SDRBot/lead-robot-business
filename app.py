@@ -814,7 +814,7 @@ curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
            </tr>
    """
    
-   for lead in recent_leads:
+    for lead in recent_leads:
        created_date = lead['created_at'][:16] if lead['created_at'] else 'N/A'
        stage_class = lead['qualification_stage'].replace('_lead', '')
        
