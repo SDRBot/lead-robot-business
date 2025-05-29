@@ -1,9 +1,5 @@
-# main.py - Main entry point for Render
+# main.py - Simple entry point for Render
 from app import app
-from website import app as website_app
-
-# Combine both apps
-app.mount("/business", website_app)
 
 if __name__ == "__main__":
     import uvicorn
