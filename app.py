@@ -21,8 +21,29 @@ from contextlib import asynccontextmanager
 load_dotenv()
 
 # Initialize APIs
-openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-sendgrid_client = SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
+try:
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if openai_api_key:
+        openai_client = OpenAI(api_key=openai_api_key)
+        print("✅ OpenAI client initialized successfully")
+    else:
+        print("⚠️ OPENAI_API_KEY not set - AI features will be disabled")
+        openai_client = None
+except Exception as e:
+    print(f"❌ Error initializing OpenAI client: {e}")
+    openai_client = None
+
+try:
+    sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
+    if sendgrid_api_key:
+        sendgrid_client = SendGridAPIClient(api_key=sendgrid_api_key)
+        print("✅ SendGrid client initialized successfully")
+    else:
+        print("⚠️ SENDGRID_API_KEY not set - email features will be disabled")
+        sendgrid_client = None
+except Exception as e:
+    print(f"❌ Error initializing SendGrid client: {e}")
+    sendgrid_client = None
 
 # Database setup
 @asynccontextmanager
@@ -114,8 +135,21 @@ def init_database():
     conn.close()
 
 # AI Analysis Functions
-def analyze_lead_response(message: str, conversation_history: list) -> Dict[str, Any]:
-    """Use OpenAI to analyze lead responses and extract qualification data"""
+if not openai_client:
+        print("⚠️ OpenAI not available, using default analysis")
+        return {
+            "company_size": "unknown",
+            "budget_range": "unknown", 
+            "authority_level": "unknown",
+            "timeline": "unknown",
+            "pain_points": [],
+            "interest_level": "medium",
+            "next_question": "Could you tell me more about your current challenges?",
+            "qualification_score": 30,
+            "sentiment": "neutral",
+            "ready_for_demo": False,
+            "key_insights": "OpenAI not configured - using default analysis"
+        }
     
     conversation_context = "\n".join([
         f"{msg['sender']}: {msg['content']}" 
