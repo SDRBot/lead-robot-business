@@ -314,25 +314,15 @@ curl -X POST "https://your-domain.onrender.com/api/leads" \\
 
 # Stripe functions
 def create_checkout_session(plan: str, success_url: str, cancel_url: str):
-    """Create Stripe checkout session with detailed error handling"""
-    
-    print(f"🔧 Creating checkout session for plan: {plan}")
-    print(f"🔧 Stripe API key exists: {bool(stripe.api_key)}")
-    print(f"🔧 Stripe API key prefix: {stripe.api_key[:7] if stripe.api_key else 'None'}")
+    """Create Stripe checkout session with 14-day free trial"""
     
     if plan not in PRICING_PLANS:
         raise HTTPException(status_code=404, detail="Plan not found")
     
     plan_info = PRICING_PLANS[plan]
-    print(f"🔧 Plan info: {plan_info}")
     
     try:
-        # Test Stripe connection first
-        print("🔧 Testing Stripe connection...")
-        account = stripe.Account.retrieve()
-        print(f"✅ Stripe connected to account: {account.id}")
-        
-        print("🔧 Creating checkout session...")
+        # Create checkout session with free trial
         checkout_session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
@@ -352,25 +342,25 @@ def create_checkout_session(plan: str, success_url: str, cancel_url: str):
             cancel_url=cancel_url,
             metadata={'plan': plan},
             allow_promotion_codes=True,
+            # ADD FREE TRIAL HERE 👇
+            subscription_data={
+                'trial_period_days': 14,  # 14-day free trial
+                'trial_settings': {
+                    'end_behavior': {
+                        'missing_payment_method': 'cancel'  # Cancel if no payment method after trial
+                    }
+                }
+            },
+            # Collect payment method during trial
+            payment_method_collection='if_required',
         )
         
-        print(f"✅ Checkout session created: {checkout_session.id}")
-        print(f"✅ Checkout URL: {checkout_session.url}")
+        print(f"✅ Created checkout session with 14-day trial: {checkout_session.id}")
         return checkout_session.url
         
-    except stripe.error.AuthenticationError as e:
-        print(f"❌ Stripe Authentication Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Stripe authentication failed: {str(e)}")
-    except stripe.error.InvalidRequestError as e:
-        print(f"❌ Stripe Invalid Request Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Stripe request error: {str(e)}")
-    except stripe.error.StripeError as e:
-        print(f"❌ Stripe Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
     except Exception as e:
-        print(f"❌ General Error: {str(e)}")
-        print(f"❌ Error type: {type(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        print(f"❌ Checkout error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating checkout: {str(e)}")
 
 def handle_successful_payment(session_id: str):
     """Handle successful payment with better error handling"""
