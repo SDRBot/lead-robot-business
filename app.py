@@ -312,6 +312,73 @@ curl -X POST "https://your-domain.onrender.com/api/leads" \\
     
     return send_email(customer_email, subject, content)
 
+# Add this RIGHT AFTER your send_welcome_email function
+def init_hubspot_service():
+    """Initialize HubSpot integration"""
+    hubspot_key = os.getenv("HUBSPOT_API_KEY")
+    if hubspot_key:
+        try:
+            import requests
+            # Test HubSpot connection
+            response = requests.get(
+                "https://api.hubapi.com/crm/v3/objects/contacts",
+                headers={"Authorization": f"Bearer {hubspot_key}"},
+                params={"limit": 1}
+            )
+            if response.status_code == 200:
+                print("✅ HubSpot connected successfully")
+                return {"api_key": hubspot_key, "connected": True}
+            else:
+                print(f"❌ HubSpot connection failed: {response.status_code}")
+                return {"connected": False, "error": f"HTTP {response.status_code}"}
+        except Exception as e:
+            print(f"❌ HubSpot error: {e}")
+            return {"connected": False, "error": str(e)}
+    else:
+        print("⚠️ HUBSPOT_API_KEY not set")
+        return {"connected": False, "error": "No API key"}
+
+def sync_lead_to_hubspot(lead_data: dict):
+    """Sync qualified lead to HubSpot"""
+    if not os.getenv("HUBSPOT_API_KEY"):
+        return False
+    
+    try:
+        import requests
+        
+        hubspot_data = {
+            "properties": {
+                "email": lead_data["email"],
+                "firstname": lead_data.get("first_name", ""),
+                "lastname": lead_data.get("last_name", ""),
+                "company": lead_data.get("company", ""),
+                "phone": lead_data.get("phone", ""),
+                "leadstatus": "NEW",
+                "lead_source": "AI Lead Robot",
+                "qualification_score": str(lead_data.get("qualification_score", 0))
+            }
+        }
+        
+        response = requests.post(
+            "https://api.hubapi.com/crm/v3/objects/contacts",
+            headers={
+                "Authorization": f"Bearer {os.getenv('HUBSPOT_API_KEY')}",
+                "Content-Type": "application/json"
+            },
+            json=hubspot_data
+        )
+        
+        if response.status_code in [200, 201]:
+            print(f"✅ Lead synced to HubSpot: {lead_data['email']}")
+            return True
+        else:
+            print(f"❌ HubSpot sync failed: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ HubSpot sync error: {e}")
+        return False
+
 # Stripe functions
 def create_checkout_session(plan: str, success_url: str, cancel_url: str):
     """Create Stripe checkout session with 14-day free trial"""
@@ -500,147 +567,318 @@ def handle_successful_payment(session_id: str):
         raise HTTPException(status_code=500, detail=f"Error processing signup: {str(e)}")
 
 # Routes - Public pages
+@app.get("/debug/session/{session_id}")
+async def debug_session(session_id: str):
+    """Debug a specific Stripe session"""
+    try:
+        session = stripe.checkout.Session.retrieve(
+            session_id,
+            expand=['customer', 'subscription']
+        )
+        
+        return {
+            "session_id": session_id,
+            "session_status": session.status,
+            "session_mode": session.mode,
+            "customer_email": session.customer_details.email if session.customer_details else "None",
+            "customer_id": session.customer,
+            "subscription_id": session.subscription,
+            "metadata": session.metadata,
+            "payment_status": session.payment_status,
+        }
+    except Exception as e:
+        return {"error": str(e), "session_id": session_id}
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    """GDPR compliant privacy policy"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Privacy Policy - AI Lead Robot</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; 
+                padding: 20px; line-height: 1.6; background: #f5f7fa; 
+            }
+            .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+            h1, h2 { color: #333; }
+            .contact { background: #e8f5e9; padding: 20px; border-radius: 8px; margin: 20px 0; }
+            .btn { background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🔒 Privacy Policy</h1>
+            <p><strong>Last updated:</strong> May 29, 2025</p>
+            
+            <h2>1. Information We Collect</h2>
+            <p>We collect information you provide directly to us, such as:</p>
+            <ul>
+                <li><strong>Account Information:</strong> Email address, name, company details</li>
+                <li><strong>Lead Data:</strong> Contact information of your leads that you submit through our API</li>
+                <li><strong>Payment Information:</strong> Processed securely by Stripe (we don't store card details)</li>
+                <li><strong>Usage Data:</strong> How you use our service, API calls, feature usage</li>
+            </ul>
+            
+            <h2>2. How We Use Your Information</h2>
+            <ul>
+                <li>Provide and improve our AI lead qualification service</li>
+                <li>Process your leads and send qualification reports</li>
+                <li>Send transactional emails (welcome, usage alerts, etc.)</li>
+                <li>Provide customer support</li>
+                <li>Comply with legal obligations</li>
+            </ul>
+            
+            <h2>3. Your Rights (GDPR)</h2>
+            <p>If you're in the EU, you have the right to:</p>
+            <ul>
+                <li><strong>Access:</strong> Request a copy of your personal data</li>
+                <li><strong>Rectification:</strong> Correct inaccurate personal data</li>
+                <li><strong>Erasure:</strong> Request deletion of your personal data</li>
+                <li><strong>Portability:</strong> Receive your data in a structured format</li>
+                <li><strong>Object:</strong> Object to processing of your personal data</li>
+                <li><strong>Restrict:</strong> Request restriction of processing</li>
+            </ul>
+            
+            <h2>4. Data Retention</h2>
+            <p>We retain your data for as long as your account is active, plus 30 days after cancellation for backup purposes.</p>
+            
+            <h2>5. Data Security</h2>
+            <p>We use industry-standard security measures including encryption, secure databases, and regular security audits.</p>
+            
+            <h2>6. Third-Party Services</h2>
+            <ul>
+                <li><strong>Stripe:</strong> Payment processing</li>
+                <li><strong>SendGrid:</strong> Email delivery</li>
+                <li><strong>OpenAI:</strong> AI text processing (optional)</li>
+                <li><strong>HubSpot:</strong> CRM integration (optional)</li>
+            </ul>
+            
+            <div class="contact">
+                <h2>7. Contact Us</h2>
+                <p>For privacy questions or to exercise your rights:</p>
+                <p><strong>Email:</strong> privacy@yourcompany.com</p>
+                <p><strong>Data Protection Officer:</strong> dpo@yourcompany.com</p>
+            </div>
+            
+            <p style="text-align: center; margin-top: 30px;">
+                <a href="/" class="btn">← Back to Home</a>
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_of_service():
+    """Terms of service"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Terms of Service - AI Lead Robot</title>
+        <style>
+            body { 
+                font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; 
+                padding: 20px; line-height: 1.6; background: #f5f7fa; 
+            }
+            .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+            h1, h2 { color: #333; }
+            .btn { background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>📋 Terms of Service</h1>
+            <p><strong>Last updated:</strong> May 29, 2025</p>
+            
+            <h2>1. Service Description</h2>
+            <p>AI Lead Robot provides automated lead qualification services using artificial intelligence.</p>
+            
+            <h2>2. Free Trial</h2>
+            <p>We offer a 14-day free trial. You can cancel anytime during the trial without being charged.</p>
+            
+            <h2>3. Billing</h2>
+            <p>After your trial ends, you'll be charged monthly. You can cancel anytime from your dashboard.</p>
+            
+            <h2>4. Data Usage</h2>
+            <p>You're responsible for ensuring you have permission to process the lead data you submit to our service.</p>
+            
+            <h2>5. Acceptable Use</h2>
+            <p>Don't use our service for spam, illegal activities, or harassment.</p>
+            
+            <h2>6. Service Availability</h2>
+            <p>We strive for 99.9% uptime but cannot guarantee uninterrupted service.</p>
+            
+            <h2>7. Cancellation</h2>
+            <p>You can cancel your subscription anytime from your dashboard or by emailing support.</p>
+            
+            <h2>8. Limitation of Liability</h2>
+            <p>Our liability is limited to the amount you've paid for the service.</p>
+            
+            <p style="text-align: center; margin-top: 30px;">
+                <a href="/" class="btn">← Back to Home</a>
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
 @app.get("/", response_class=HTMLResponse)
 async def home():
     """Homepage with marketing and pricing"""
     
     return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>🤖 AI Lead Robot - Qualify Leads Automatically</title>
-        <style>
-            body { 
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                margin: 0; padding: 0; background: #f5f7fa; 
-            }
-            .hero { 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white; padding: 80px 20px; text-align: center;
-            }
-            .hero h1 { font-size: 3em; margin: 0; }
-            .hero p { font-size: 1.2em; margin: 20px 0; }
-            .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
-            .features { 
-                display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                gap: 30px; padding: 80px 0; 
-            }
-            .feature { 
-                background: white; padding: 40px; border-radius: 15px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center;
-            }
-            .feature h3 { color: #333; margin-top: 0; }
-            .plans { 
-                display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-                gap: 40px; padding: 60px 0; 
-            }
-            .plan { 
-                background: white; padding: 40px; border-radius: 15px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.1); position: relative;
-            }
-            .popular { border: 3px solid #667eea; transform: scale(1.05); }
-            .popular::before {
-                content: "🔥 MOST POPULAR";
-                position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
-                background: #667eea; color: white; padding: 8px 20px; border-radius: 20px;
-                font-size: 12px; font-weight: bold;
-            }
-            .price { font-size: 3em; font-weight: bold; color: #667eea; margin: 20px 0; }
-            .btn {
-                background: #667eea; color: white; padding: 15px 30px; border: none;
-                border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer;
-                text-decoration: none; display: inline-block; width: 100%; text-align: center;
-                transition: all 0.3s;
-            }
-            .btn:hover { background: #5a6fd8; transform: translateY(-2px); }
-            .features-list { text-align: left; margin: 30px 0; }
-            .features-list li { margin: 10px 0; padding-left: 25px; position: relative; }
-            .features-list li::before { content: "✅"; position: absolute; left: 0; }
-        </style>
-    </head>
-    <body>
-        <div class="hero">
-            <div class="container">
-                <h1>🤖 AI Lead Robot</h1>
-                <p>Stop wasting time on unqualified leads. Our AI automatically qualifies your leads and sends you only the hot ones ready to buy.</p>
-                <a href="#pricing" class="btn" style="width: auto; margin-top: 20px;">Start Free Trial</a>
-            </div>
-        </div>
-        
+<!DOCTYPE html>
+<html>
+<head>
+    <title>🤖 AI Lead Robot - Qualify Leads Automatically</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0; padding: 0; background: #f5f7fa; 
+        }
+        .hero { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; padding: 80px 20px; text-align: center;
+        }
+        .hero h1 { font-size: 3em; margin: 0; }
+        .hero p { font-size: 1.2em; margin: 20px 0; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+        .features { 
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px; padding: 80px 0; 
+        }
+        .feature { 
+            background: white; padding: 40px; border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center;
+        }
+        .feature h3 { color: #333; margin-top: 0; }
+        .plans { 
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 40px; padding: 60px 0; 
+        }
+        .plan { 
+            background: white; padding: 40px; border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1); position: relative;
+        }
+        .popular { border: 3px solid #667eea; transform: scale(1.05); }
+        .popular::before {
+            content: "🔥 MOST POPULAR";
+            position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
+            background: #667eea; color: white; padding: 8px 20px; border-radius: 20px;
+            font-size: 12px; font-weight: bold;
+        }
+        .price { font-size: 3em; font-weight: bold; color: #667eea; margin: 20px 0; }
+        .btn {
+            background: #667eea; color: white; padding: 15px 30px; border: none;
+            border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer;
+            text-decoration: none; display: inline-block; width: 100%; text-align: center;
+            transition: all 0.3s;
+        }
+        .btn:hover { background: #5a6fd8; transform: translateY(-2px); }
+        .features-list { text-align: left; margin: 30px 0; }
+        .features-list li { margin: 10px 0; padding-left: 25px; position: relative; }
+        .features-list li::before { content: "✅"; position: absolute; left: 0; }
+    </style>
+</head>
+<body>
+    <div class="hero">
         <div class="container">
-            <div class="features">
-                <div class="feature">
-                    <h3>🧠 AI-Powered Qualification</h3>
-                    <p>Our AI analyzes every lead response to determine buying intent, budget, authority, and timeline automatically.</p>
-                </div>
-                <div class="feature">
-                    <h3>📧 Automated Follow-Up</h3>
-                    <p>Personalized email sequences that adapt based on lead responses. Never miss a follow-up again.</p>
-                </div>
-                <div class="feature">
-                    <h3>🎯 Hot Lead Alerts</h3>
-                    <p>Get instant notifications when a lead is ready to buy. Focus your time on qualified prospects only.</p>
-                </div>
-                <div class="feature">
-                    <h3>📊 Smart Analytics</h3>
-                    <p>Track conversion rates, lead sources, and qualification metrics with detailed reporting dashboards.</p>
-                </div>
-                <div class="feature">
-                    <h3>🔗 CRM Integration</h3>
-                    <p>Seamlessly connect with Salesforce, HubSpot, Pipedrive and 1000+ other tools via Zapier.</p>
-                </div>
-                <div class="feature">
-                    <h3>⚡ 5-Minute Setup</h3>
-                    <p>Add one line of code to your website and start qualifying leads immediately. No complex setup required.</p>
-                </div>
+            <h1>🤖 AI Lead Robot</h1>
+            <p>Stop wasting time on unqualified leads. Our AI automatically qualifies your leads and sends you only the hot ones ready to buy.</p>
+            <a href="#pricing" class="btn" style="width: auto; margin-top: 20px;">Start 14-Day Free Trial</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="features">
+            <div class="feature">
+                <h3>🧠 AI-Powered Qualification</h3>
+                <p>Our AI analyzes every lead response to determine buying intent, budget, authority, and timeline automatically.</p>
             </div>
-            
-            <div id="pricing" style="text-align: center; padding: 40px 0;">
-                <h2 style="font-size: 2.5em; margin-bottom: 20px;">Simple, Transparent Pricing</h2>
-                <p style="font-size: 1.2em; color: #666;">Start with a 14-day free trial. Cancel anytime.</p>
+            <div class="feature">
+                <h3>📧 Automated Follow-Up</h3>
+                <p>Personalized email sequences that adapt based on lead responses. Never miss a follow-up again.</p>
             </div>
-            
-            <div class="plans">
-                <div class="plan">
-                    <h3>Starter Plan</h3>
-                    <div class="price">£99<span style="font-size: 0.4em;">/mo</span></div>
-                    <ul class="features-list">
-                        <li>500 leads per month</li>
-                        <li>AI-powered qualification</li>
-                        <li>Email automation</li>
-                        <li>Basic analytics</li>
-                        <li>Email support</li>
-                    </ul>
-                    <a href="/checkout/starter" class="btn">Start Free Trial</a>
-                </div>
-                
-                <div class="plan popular">
-                    <h3>Professional Plan</h3>
-                    <div class="price">£299<span style="font-size: 0.4em;">/mo</span></div>
-                    <ul class="features-list">
-                        <li>2,000 leads per month</li>
-                        <li>Everything in Starter</li>
-                        <li>CRM integrations</li>
-                        <li>Advanced analytics</li>
-                        <li>Priority support</li>
-                        <li>API access</li>
-                        <li>Custom workflows</li>
-                    </ul>
-                    <a href="/checkout/professional" class="btn">Start Free Trial</a>
-                </div>
+            <div class="feature">
+                <h3>🎯 Hot Lead Alerts</h3>
+                <p>Get instant notifications when a lead is ready to buy. Focus your time on qualified prospects only.</p>
+            </div>
+            <div class="feature">
+                <h3>📊 Smart Analytics</h3>
+                <p>Track conversion rates, lead sources, and qualification metrics with detailed reporting dashboards.</p>
+            </div>
+            <div class="feature">
+                <h3>🔗 CRM Integration</h3>
+                <p>Seamlessly connect with Salesforce, HubSpot, Pipedrive and 1000+ other tools via Zapier.</p>
+            </div>
+            <div class="feature">
+                <h3>⚡ 5-Minute Setup</h3>
+                <p>Add one line of code to your website and start qualifying leads immediately. No complex setup required.</p>
             </div>
         </div>
         
-        <div style="background: #2c3e50; color: white; padding: 60px 0; margin-top: 80px; text-align: center;">
-            <div class="container">
-                <h2>Ready to 10x Your Lead Conversion?</h2>
-                <p>Join hundreds of businesses already using AI Lead Robot</p>
-                <a href="/checkout/professional" class="btn" style="background: #e74c3c;">Start Free Trial Today</a>
+        <div id="pricing" style="text-align: center; padding: 40px 0;">
+            <h2 style="font-size: 2.5em; margin-bottom: 20px;">Simple, Transparent Pricing</h2>
+            <p style="font-size: 1.2em; color: #666;">Start with a 14-day free trial. No credit card required during trial.</p>
+        </div>
+        
+        <div class="plans">
+            <div class="plan">
+                <h3>Starter Plan</h3>
+                <div class="price">$99<span style="font-size: 0.4em;">/mo</span></div>
+                <ul class="features-list">
+                    <li>500 leads per month</li>
+                    <li>AI-powered qualification</li>
+                    <li>Email automation</li>
+                    <li>Basic analytics</li>
+                    <li>Email support</li>
+                </ul>
+                <a href="/checkout/starter" class="btn">Start 14-Day Free Trial</a>
+            </div>
+            
+            <div class="plan popular">
+                <h3>Professional Plan</h3>
+                <div class="price">$299<span style="font-size: 0.4em;">/mo</span></div>
+                <ul class="features-list">
+                    <li>2,000 leads per month</li>
+                    <li>Everything in Starter</li>
+                    <li>CRM integrations</li>
+                    <li>Advanced analytics</li>
+                    <li>Priority support</li>
+                    <li>API access</li>
+                    <li>Custom workflows</li>
+                </ul>
+                <a href="/checkout/professional" class="btn">Start 14-Day Free Trial</a>
             </div>
         </div>
-    </body>
-    </html>
-    """
+    </div>
+    
+    <div style="background: #2c3e50; color: white; padding: 60px 0; margin-top: 80px; text-align: center;">
+        <div class="container">
+            <h2>Ready to 10x Your Lead Conversion?</h2>
+            <p>Join hundreds of businesses already using AI Lead Robot</p>
+            <a href="/checkout/professional" class="btn" style="background: #e74c3c;">Start Free Trial Today</a>
+            
+            <!-- GDPR Links -->
+            <div style="margin-top: 40px; border-top: 1px solid #34495e; padding-top: 30px;">
+                <p style="margin: 10px 0;">
+                    <a href="/privacy" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Privacy Policy</a>
+                    <a href="/terms" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Terms of Service</a>
+                    <a href="mailto:support@yourcompany.com" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Support</a>
+                </p>
+                <p style="font-size: 12px; color: #95a5a6;">
+                    We use cookies to improve your experience. By using our site, you consent to cookies.
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
 @app.get("/debug/stripe")
 async def debug_stripe():
@@ -967,6 +1205,7 @@ curl -X POST "{base_url}/api/leads" \\
            
            <a href="/docs" class="btn">📚 Full API Documentation</a>
            <a href="/test-form?api_key={api_key}" class="btn">🧪 Test Lead Capture</a>
+           <a href="/integrations?api_key={api_key}" class="btn">🔗 Integrations</a>
        </div>
        
        <h2>📋 Recent Leads</h2>
@@ -1142,83 +1381,96 @@ async def test_form(api_key: str, request: Request):
    </html>
    """
 
-# Protected API endpoints
 @app.post("/api/leads")
 async def create_lead(lead: LeadInput, customer: dict = Depends(get_current_customer)):
-   """Create a new lead (requires API key)"""
-   
-   # Check usage limits
-   if not check_usage_limit(customer['id']):
-       raise HTTPException(
-           status_code=429, 
-           detail=f"Monthly limit of {customer['leads_limit']} leads exceeded"
-       )
-   
-   lead_id = str(uuid.uuid4())
-   
-   try:
-       conn = get_db_connection()
-       cursor = conn.cursor()
-       
-       # Insert lead
-       cursor.execute('''
-           INSERT INTO leads (
-               id, customer_id, email, first_name, last_name, 
-               company, phone, source, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ''', (
-           lead_id, customer['id'], lead.email, lead.first_name, lead.last_name,
-           lead.company, lead.phone, lead.source, datetime.now(), datetime.now()
-       ))
-       
-       # Update usage counter
-       cursor.execute('''
-           UPDATE customers 
-           SET leads_used_this_month = leads_used_this_month + 1, updated_at = ?
-           WHERE id = ?
-       ''', (datetime.now(), customer['id']))
-       
-       # Log analytics
-       cursor.execute('''
-           INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
-           VALUES (?, ?, ?, ?, ?)
-       ''', (
-           str(uuid.uuid4()), customer['id'], "lead_created",
-           json.dumps({"source": lead.source, "email": lead.email}),
-           datetime.now()
-       ))
-       
-       conn.commit()
-       conn.close()
-       
-       # Send welcome email to lead
-       email_sent = False
-       if lead.first_name and SERVICES["sendgrid"]:
-           subject = f"Thanks for your interest, {lead.first_name}!"
-           content = f"""
-           <div style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
-               <h2>Hi {lead.first_name}!</h2>
-               <p>Thanks for your interest! We'd love to learn more about {lead.company or 'your company'}.</p>
-               <p><strong>Quick question:</strong> What's your biggest challenge right now?</p>
-               <p>Just reply to this email and let us know!</p>
-               <p>Best regards,<br>The Team</p>
-           </div>
-           """
-           email_sent = send_email(lead.email, subject, content)
-       
-       return {
-           "lead_id": lead_id,
-           "status": "created",
-           "email_sent": email_sent,
-           "message": "Lead captured successfully!",
-           "usage": {
-               "used": customer['leads_used_this_month'] + 1,
-               "limit": customer['leads_limit']
-           }
-       }
-   
-   except Exception as e:
-       raise HTTPException(status_code=500, detail=f"Error creating lead: {str(e)}")
+    """Create a new lead (requires API key)"""
+    
+    # Check usage limits
+    if not check_usage_limit(customer['id']):
+        raise HTTPException(
+            status_code=429, 
+            detail=f"Monthly limit of {customer['leads_limit']} leads exceeded"
+        )
+    
+    lead_id = str(uuid.uuid4())
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Insert lead
+        cursor.execute('''
+            INSERT INTO leads (
+                id, customer_id, email, first_name, last_name, 
+                company, phone, source, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            lead_id, customer['id'], lead.email, lead.first_name, lead.last_name,
+            lead.company, lead.phone, lead.source, datetime.now(), datetime.now()
+        ))
+        
+        # Update usage counter
+        cursor.execute('''
+            UPDATE customers 
+            SET leads_used_this_month = leads_used_this_month + 1, updated_at = ?
+            WHERE id = ?
+        ''', (datetime.now(), customer['id']))
+        
+        # Log analytics
+        cursor.execute('''
+            INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            str(uuid.uuid4()), customer['id'], "lead_created",
+            json.dumps({"source": lead.source, "email": lead.email}),
+            datetime.now()
+        ))
+        
+        conn.commit()
+        conn.close()
+        
+        # Send welcome email to lead
+        email_sent = False
+        if lead.first_name and SERVICES["sendgrid"]:
+            subject = f"Thanks for your interest, {lead.first_name}!"
+            content = f"""
+            <div style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2>Hi {lead.first_name}!</h2>
+                <p>Thanks for your interest! We'd love to learn more about {lead.company or 'your company'}.</p>
+                <p><strong>Quick question:</strong> What's your biggest challenge right now?</p>
+                <p>Just reply to this email and let us know!</p>
+                <p>Best regards,<br>The Team</p>
+            </div>
+            """
+            email_sent = send_email(lead.email, subject, content)
+        
+        # Auto-sync to HubSpot if connected
+        hubspot_synced = False
+        if os.getenv("HUBSPOT_API_KEY"):
+            lead_data_for_hubspot = {
+                "email": lead.email,
+                "first_name": lead.first_name,
+                "last_name": lead.last_name,
+                "company": lead.company,
+                "phone": lead.phone,
+                "qualification_score": 0  # Initial score
+            }
+            hubspot_synced = sync_lead_to_hubspot(lead_data_for_hubspot)
+        
+        return {
+            "lead_id": lead_id,
+            "status": "created",
+            "email_sent": email_sent,
+            "hubspot_synced": hubspot_synced,
+            "message": "Lead captured successfully!",
+            "usage": {
+                "used": customer['leads_used_this_month'] + 1,
+                "limit": customer['leads_limit']
+            }
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating lead: {str(e)}")
 
 @app.get("/api/leads")
 async def get_leads(customer: dict = Depends(get_current_customer), skip: int = 0, limit: int = 50):
