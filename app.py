@@ -363,28 +363,54 @@ def create_checkout_session(plan: str, success_url: str, cancel_url: str):
         raise HTTPException(status_code=500, detail=f"Error creating checkout: {str(e)}")
 
 def handle_successful_payment(session_id: str):
-    """Handle successful payment with better error handling"""
+    """Handle successful payment/trial signup with better error handling"""
     
     try:
-        # Retrieve the session
+        print(f"🔧 Processing session: {session_id}")
+        
+        # Retrieve the session with expanded data
         session = stripe.checkout.Session.retrieve(
             session_id,
-            expand=['customer', 'subscription']
+            expand=['customer', 'subscription', 'subscription.latest_invoice']
         )
         
-        print(f"Retrieved session: {session.id}")
+        print(f"🔧 Session mode: {session.mode}")
+        print(f"🔧 Session status: {session.status}")
+        print(f"🔧 Customer details: {session.customer_details}")
         
-        if not session.customer_details or not session.customer_details.email:
+        # Check if we have customer email
+        customer_email = None
+        if session.customer_details and session.customer_details.email:
+            customer_email = session.customer_details.email
+        elif session.customer and hasattr(session.customer, 'email'):
+            customer_email = session.customer.email
+        
+        if not customer_email:
+            print("❌ No customer email found in session")
             raise HTTPException(status_code=400, detail="No customer email found")
         
-        customer_email = session.customer_details.email
-        plan = session.metadata.get('plan')
+        print(f"🔧 Customer email: {customer_email}")
         
+        # Get plan from metadata
+        plan = session.metadata.get('plan') if session.metadata else None
         if not plan or plan not in PRICING_PLANS:
-            raise HTTPException(status_code=400, detail="Invalid plan in session metadata")
+            print(f"❌ Invalid plan: {plan}")
+            raise HTTPException(status_code=400, detail="Invalid plan in session")
         
+        print(f"🔧 Plan: {plan}")
+        
+        # Get Stripe IDs
         stripe_customer_id = session.customer
-        stripe_subscription_id = session.subscription
+        stripe_subscription_id = None
+        
+        if session.subscription:
+            if isinstance(session.subscription, str):
+                stripe_subscription_id = session.subscription
+            else:
+                stripe_subscription_id = session.subscription.id
+        
+        print(f"🔧 Stripe customer ID: {stripe_customer_id}")
+        print(f"🔧 Stripe subscription ID: {stripe_subscription_id}")
         
         # Generate API key
         api_key = f"sk_live_{str(uuid.uuid4()).replace('-', '')}"
@@ -396,52 +422,65 @@ def handle_successful_payment(session_id: str):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Check if customer already exists
-        cursor.execute("SELECT id FROM customers WHERE email = ?", (customer_email,))
-        existing_customer = cursor.fetchone()
-        
-        if existing_customer:
-            # Update existing customer
+        try:
+            # Check if customer already exists
+            cursor.execute("SELECT id FROM customers WHERE email = ?", (customer_email,))
+            existing_customer = cursor.fetchone()
+            
+            if existing_customer:
+                print(f"🔧 Updating existing customer: {customer_email}")
+                # Update existing customer
+                cursor.execute("""
+                    UPDATE customers SET
+                        stripe_customer_id = ?, stripe_subscription_id = ?,
+                        plan = ?, api_key = ?, leads_limit = ?,
+                        status = 'active', updated_at = ?
+                    WHERE email = ?
+                """, (
+                    stripe_customer_id, stripe_subscription_id, plan, api_key,
+                    plan_info['leads_limit'], datetime.now(), customer_email
+                ))
+                customer_id = existing_customer[0]
+            else:
+                print(f"🔧 Creating new customer: {customer_email}")
+                # Create new customer
+                cursor.execute("""
+                    INSERT INTO customers (
+                        id, email, stripe_customer_id, stripe_subscription_id, 
+                        plan, api_key, leads_limit, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    customer_id, customer_email, stripe_customer_id, stripe_subscription_id,
+                    plan, api_key, plan_info['leads_limit'], 'active', datetime.now(), datetime.now()
+                ))
+            
+            # Log the signup
             cursor.execute("""
-                UPDATE customers SET
-                    stripe_customer_id = ?, stripe_subscription_id = ?,
-                    plan = ?, api_key = ?, leads_limit = ?,
-                    status = 'active', updated_at = ?
-                WHERE email = ?
+                INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
+                VALUES (?, ?, ?, ?, ?)
             """, (
-                stripe_customer_id, stripe_subscription_id, plan, api_key,
-                plan_info['leads_limit'], datetime.now(), customer_email
+                str(uuid.uuid4()), customer_id, "customer_signup", 
+                json.dumps({
+                    "plan": plan, 
+                    "email": customer_email, 
+                    "session_id": session_id,
+                    "is_trial": bool(session.subscription and hasattr(session.subscription, 'trial_end') and session.subscription.trial_end)
+                }), 
+                datetime.now()
             ))
-            customer_id = existing_customer[0]
-        else:
-            # Create new customer
-            cursor.execute("""
-                INSERT INTO customers (
-                    id, email, stripe_customer_id, stripe_subscription_id, 
-                    plan, api_key, leads_limit, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                customer_id, customer_email, stripe_customer_id, stripe_subscription_id,
-                plan, api_key, plan_info['leads_limit'], datetime.now(), datetime.now()
-            ))
-        
-        # Log the signup
-        cursor.execute("""
-            INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            str(uuid.uuid4()), customer_id, "customer_signup", 
-            json.dumps({"plan": plan, "email": customer_email, "session_id": session_id}), 
-            datetime.now()
-        ))
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"✅ Customer created: {customer_email} with plan {plan}")
+            
+            conn.commit()
+            print("✅ Database updated successfully")
+            
+        finally:
+            conn.close()
         
         # Send welcome email
-        send_welcome_email(customer_email, plan, api_key)
+        try:
+            send_welcome_email(customer_email, plan, api_key)
+            print("✅ Welcome email sent")
+        except Exception as e:
+            print(f"⚠️ Welcome email failed: {e}")
         
         return {
             "customer_id": customer_id,
@@ -452,11 +491,13 @@ def handle_successful_payment(session_id: str):
         }
         
     except stripe.error.StripeError as e:
-        print(f"❌ Stripe error in payment processing: {str(e)}")
+        print(f"❌ Stripe error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Stripe error: {str(e)}")
     except Exception as e:
-        print(f"❌ Error processing payment: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing payment: {str(e)}")
+        print(f"❌ General error: {str(e)}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error processing signup: {str(e)}")
 
 # Routes - Public pages
 @app.get("/", response_class=HTMLResponse)
@@ -659,11 +700,23 @@ async def checkout(plan: str, request: Request):
 
 @app.get("/success", response_class=HTMLResponse)
 async def payment_success(session_id: str, request: Request):
-    """Payment success page"""
+    """Payment success page with better error handling"""
+    
+    if not session_id:
+        return HTMLResponse("""
+        <div style="text-align: center; font-family: Arial; margin: 100px;">
+            <h1>❌ Missing Session ID</h1>
+            <p>No session ID provided in the URL.</p>
+            <a href="/" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">← Back to Home</a>
+        </div>
+        """, status_code=400)
     
     try:
         payment_info = handle_successful_payment(session_id)
         plan_info = PRICING_PLANS[payment_info['plan']]
+        
+        # Check if this is a trial
+        is_trial = True  # Assume trial for now since we're using trial_period_days
         
         return f"""
         <!DOCTYPE html>
@@ -679,14 +732,14 @@ async def payment_success(session_id: str, request: Request):
                     background: white; padding: 50px; border-radius: 15px;
                     box-shadow: 0 4px 20px rgba(0,0,0,0.1);
                 }}
+                .trial-notice {{
+                    background: #e8f5e9; padding: 20px; border-radius: 10px;
+                    margin: 20px 0; border-left: 5px solid #28a745;
+                }}
                 .api-key {{
                     background: #f8f9fa; padding: 20px; border-radius: 8px;
                     font-family: monospace; font-size: 14px; margin: 20px 0;
                     word-break: break-all; border: 2px dashed #667eea;
-                }}
-                .next-steps {{
-                    background: #e8f5e9; padding: 30px; border-radius: 10px;
-                    margin: 30px 0; text-align: left;
                 }}
                 .btn {{
                     background: #667eea; color: white; padding: 15px 30px;
@@ -698,9 +751,16 @@ async def payment_success(session_id: str, request: Request):
         <body>
             <div class="success">
                 <h1>🎉 Welcome to AI Lead Robot!</h1>
-                <h2>Payment Successful!</h2>
+                {'<h2>Your 14-Day Free Trial Has Started!</h2>' if is_trial else '<h2>Payment Successful!</h2>'}
                 
-                <p><strong>Plan:</strong> {plan_info['name']}</p>
+                <div class="trial-notice">
+                    <h3>🔥 Free Trial Active</h3>
+                    <p><strong>You have 14 days to try everything risk-free!</strong></p>
+                    <p>Your trial includes full access to the {plan_info['name']} with {plan_info['leads_limit']} leads.</p>
+                    <p>You won't be charged until your trial ends. Cancel anytime.</p>
+                </div>
+                
+                <p><strong>Plan:</strong> {plan_info['name']} (${plan_info['price']}/month after trial)</p>
                 <p><strong>Monthly Limit:</strong> {plan_info['leads_limit']} leads</p>
                 <p><strong>Email:</strong> {payment_info['customer_email']}</p>
                 
@@ -708,35 +768,38 @@ async def payment_success(session_id: str, request: Request):
                 <div class="api-key">{payment_info['api_key']}</div>
                 <p><em>⚠️ Save this key securely - you'll need it to access your account!</em></p>
                 
-                <div class="next-steps">
-                    <h3>🚀 What happens next:</h3>
-                    <ol>
-                        <li><strong>Check your email</strong> - We've sent detailed setup instructions</li>
-                        <li><strong>Test your API</strong> - Use the code examples in your email</li>
-                        <li><strong>Integrate with your website</strong> - Add lead capture in 5 minutes</li>
-                        <li><strong>Connect your CRM</strong> - Automatically send qualified leads</li>
-                        <li><strong>Watch the magic happen</strong> - AI qualifies leads 24/7</li>
-                    </ol>
+                <h3>🚀 Start Using Your Trial:</h3>
+                <a href="/dashboard?api_key={payment_info['api_key']}" class="btn">📊 Go to Dashboard</a>
+                <a href="/test-form?api_key={payment_info['api_key']}" class="btn">🧪 Test Lead Capture</a>
+                
+                <div style="margin-top: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px;">
+                    <h3>📧 Check Your Email</h3>
+                    <p>We've sent detailed setup instructions to <strong>{payment_info['customer_email']}</strong></p>
+                    <p>If you don't see it, check your spam folder!</p>
                 </div>
-                
-                <h3>🎯 Quick Start:</h3>
-                <p>Test your API right now:</p>
-                <pre style="background: #f1f1f1; padding: 15px; text-align: left; border-radius: 5px; overflow-x: auto;">
-curl -X POST "{str(request.base_url).rstrip('/')}/api/leads" \\
-     -H "Content-Type: application/json" \\
-     -H "Authorization: Bearer {payment_info['api_key']}" \\
-     -d '{{"email": "test@company.com", "first_name": "John"}}'
-                </pre>
-                
-                <a href="/dashboard?api_key={payment_info['api_key']}" class="btn">📊 View Dashboard</a>
-                <a href="/docs" class="btn">📚 API Documentation</a>
             </div>
         </body>
         </html>
         """
         
     except Exception as e:
-        return HTMLResponse(f"<h1>Error: {str(e)}</h1>", status_code=500)
+        print(f"❌ Success page error: {str(e)}")
+        return HTMLResponse(f"""
+        <div style="text-align: center; font-family: Arial; margin: 100px; padding: 40px; background: #f8d7da; border-radius: 10px;">
+            <h1>❌ Setup Error</h1>
+            <p><strong>There was an issue setting up your account.</strong></p>
+            <p>Session ID: <code>{session_id}</code></p>
+            <p>Error: {str(e)}</p>
+            
+            <div style="background: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3>📧 Don't worry!</h3>
+                <p>Your payment went through successfully. We'll set up your account manually and email you within 24 hours.</p>
+                <p>Contact us at: <strong>support@yourcompany.com</strong></p>
+            </div>
+            
+            <a href="/" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">← Back to Home</a>
+        </div>
+        """, status_code=500)
 
 @app.get("/cancel", response_class=HTMLResponse)
 def payment_cancelled():
