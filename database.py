@@ -73,7 +73,17 @@ class DatabaseService:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
+        await self.execute_query('''
+    CREATE TABLE IF NOT EXISTS zapier_webhooks (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        webhook_url TEXT NOT NULL,
+        events TEXT NOT NULL,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_id) REFERENCES customers (id)
+    )
+''')        
         await self.execute_query('''
             CREATE TABLE IF NOT EXISTS leads (
                 id TEXT PRIMARY KEY,
