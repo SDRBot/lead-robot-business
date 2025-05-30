@@ -1,10 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, HttpUrl
 from typing import List
 from services.auth_service import get_current_customer
 from services.webhook_service import zapier_service
-from models import ZapierWebhookConfig
+from models import ZapierWebhookConfig, WebhookTestRequest
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
@@ -44,7 +43,7 @@ async def get_zapier_webhooks(customer: dict = Depends(get_current_customer)):
 
 @router.post("/zapier/test")
 async def test_zapier_webhook(
-    webhook_url: str,
+    request: WebhookTestRequest,
     customer: dict = Depends(get_current_customer)
 ):
     """Test a Zapier webhook with sample data"""
@@ -61,14 +60,14 @@ async def test_zapier_webhook(
         "qualification_stage": "warm_lead"
     }
     
-    async with zapier_service:
-        success = await zapier_service.send_to_zapier(webhook_url, test_lead_data)
+    success = await zapier_service.send_to_zapier(request.webhook_url, test_lead_data)
     
     return {
         "success": success,
         "message": "Test webhook sent" if success else "Test webhook failed"
     }
 
+# Rest of the file stays the same...
 @router.get("/setup", response_class=HTMLResponse)
 async def webhook_setup_page(api_key: str):
     """Zapier webhook setup page"""
