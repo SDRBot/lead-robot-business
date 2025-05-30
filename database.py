@@ -42,8 +42,8 @@ class DatabaseService:
             
         print("🔧 Initializing database...")
         # In database.py, replace the tables list in init_database method:
-tables = [
-    '''CREATE TABLE IF NOT EXISTS customers (
+    tables = [
+        '''CREATE TABLE IF NOT EXISTS customers (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE NOT NULL,
         stripe_customer_id TEXT UNIQUE,
@@ -56,9 +56,9 @@ tables = [
         password_hash TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )''',
-    
-    '''CREATE TABLE IF NOT EXISTS leads (
+        )''',
+        
+        '''CREATE TABLE IF NOT EXISTS leads (
         id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL,
         email TEXT NOT NULL,
@@ -74,18 +74,18 @@ tables = [
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (customer_id) REFERENCES customers (id)
-    )''',
+        )''',
     
-    '''CREATE TABLE IF NOT EXISTS analytics (
+        '''CREATE TABLE IF NOT EXISTS analytics (
         id TEXT PRIMARY KEY,
         customer_id TEXT,
         event_type TEXT NOT NULL,
         data TEXT,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (customer_id) REFERENCES customers (id)
-    )''',
+        )''',
     
-    '''CREATE TABLE IF NOT EXISTS zapier_webhooks (
+        '''CREATE TABLE IF NOT EXISTS zapier_webhooks (
         id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL,
         webhook_url TEXT NOT NULL,
@@ -93,9 +93,9 @@ tables = [
         active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (customer_id) REFERENCES customers (id)
-    )''',
+        )''',
     
-    '''CREATE TABLE IF NOT EXISTS support_tickets (
+        '''CREATE TABLE IF NOT EXISTS support_tickets (
         id TEXT PRIMARY KEY,
         email TEXT NOT NULL,
         subject TEXT NOT NULL,
@@ -105,17 +105,8 @@ tables = [
         status TEXT DEFAULT 'open',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )'''
-]
-        
-        # Create indexes
-        indexes = [
-            'CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads(customer_id)',
-            'CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email)',
-            'CREATE INDEX IF NOT EXISTS idx_customers_api_key ON customers(api_key)',
-            'CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email)'
-        ]
-        
+        )'''
+    ]     
         try:
             # Execute all table creation
             for i, table_sql in enumerate(tables):
