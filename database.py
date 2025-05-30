@@ -107,6 +107,19 @@ class DatabaseService:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
+            # Add this table to your init_database method
+            '''CREATE TABLE IF NOT EXISTS promo_codes (
+            id TEXT PRIMARY KEY,
+            code TEXT UNIQUE NOT NULL,
+            trial_days INTEGER NOT NULL DEFAULT 30,
+            plan_override TEXT,
+            max_uses INTEGER,
+            current_uses INTEGER DEFAULT 0,
+            expires_at TIMESTAMP,
+            description TEXT,
+            active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''',
         ]
         
         # Create indexes
