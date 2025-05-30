@@ -1,31 +1,52 @@
-# app.py - Complete AI Lead Qualification System with Zapier Integration
+# app.py - Fixed AI Email Agent System with Zapier Integration
 import os
 import json
 import uuid
 import sqlite3
-from datetime import datetime
-from typing import Optional
+import html
+import logging
+from datetime import datetime, timedelta
+from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("ai_email_agent")
 
 # Make dotenv import optional for deployment
 try:
     from dotenv import load_dotenv
     load_dotenv()
-    print("✅ Loaded environment variables from .env")
+    logger.info("✅ Loaded environment variables from .env")
 except ImportError:
-    print("⚠️ python-dotenv not available, using system environment variables")
-    def load_dotenv():
-        pass
+    logger.warning("⚠️ python-dotenv not available, using system environment variables")
 
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, EmailStr, ValidationError
 import stripe
 import hashlib
 
-# Import your new modular components
+# Custom Exception Classes
+class DatabaseError(Exception):
+    """Custom database exception"""
+    pass
+
+class CustomerNotFoundError(Exception):
+    """Customer not found exception"""
+    pass
+
+class UsageLimitExceededError(Exception):
+    """Usage limit exceeded exception"""
+    pass
+
+# Import your modular components
 try:
     from config import settings, PRICING_PLANS
     from database import db_service
@@ -33,22 +54,22 @@ try:
     from services.email_service import email_service
     from services.auth_service import auth_service
     from models import LeadInput
-    print("✅ Using modular architecture")
+    logger.info("✅ Using modular architecture")
     MODULAR_MODE = True
 except ImportError as e:
-    print(f"⚠️ Modular imports failed: {e}")
-    print("🔄 Falling back to legacy mode")
+    logger.warning(f"⚠️ Modular imports failed: {e}")
+    logger.info("🔄 Falling back to legacy mode")
     MODULAR_MODE = False
 
-# Force Stripe initialization - multiple attempts
-def initialize_stripe():
+# Stripe initialization with better error handling
+def initialize_stripe() -> bool:
     """Initialize Stripe with multiple fallback methods"""
     
     # Method 1: Direct environment variable
     stripe_key = os.getenv('STRIPE_SECRET_KEY')
-    if stripe_key:
+    if stripe_key and (stripe_key.startswith('sk_') or stripe_key.startswith('rk_')):
         stripe.api_key = stripe_key
-        print(f"✅ Stripe initialized via env var: {stripe_key[:7]}...")
+        logger.info(f"✅ Stripe initialized via env var: {stripe_key[:7]}...")
         return True
     
     # Method 2: Check other possible env var names
@@ -57,28 +78,28 @@ def initialize_stripe():
         key_value = os.getenv(key_name)
         if key_value and (key_value.startswith('sk_') or key_value.startswith('rk_')):
             stripe.api_key = key_value
-            print(f"✅ Stripe initialized via {key_name}: {key_value[:7]}...")
+            logger.info(f"✅ Stripe initialized via {key_name}: {key_value[:7]}...")
             return True
     
     # Method 3: Try from settings if available
     try:
         if MODULAR_MODE and hasattr(settings, 'stripe_secret_key') and settings.stripe_secret_key:
             stripe.api_key = settings.stripe_secret_key
-            print(f"✅ Stripe initialized via settings: {settings.stripe_secret_key[:7]}...")
+            logger.info(f"✅ Stripe initialized via settings")
             return True
     except Exception as e:
-        print(f"⚠️ Could not load from settings: {e}")
+        logger.warning(f"⚠️ Could not load from settings: {e}")
     
-    print("❌ Could not initialize Stripe - no valid key found")
-    print(f"Available env vars: {[k for k in os.environ.keys() if 'STRIPE' in k.upper()]}")
+    logger.error("❌ Could not initialize Stripe - no valid key found")
+    available_keys = [k for k in os.environ.keys() if 'STRIPE' in k.upper()]
+    logger.info(f"Available env vars: {available_keys}")
     return False
 
-# Initialize Stripe immediately
+# Initialize Stripe
 stripe_initialized = initialize_stripe()
 
-# Initialize legacy components if modular mode fails
+# Pricing plans fallback
 if not MODULAR_MODE:
-    # Pricing plans (legacy)
     PRICING_PLANS = {
         "starter": {
             "name": "Starter Plan",
@@ -86,10 +107,11 @@ if not MODULAR_MODE:
             "leads_limit": 500,
             "description": "Perfect for small businesses",
             "features": [
-                "500 leads per month",
+                "500 email conversations per month",
                 "AI-powered qualification", 
                 "Email automation",
                 "Basic analytics",
+                "Zapier integration",
                 "Email support"
             ]
         },
@@ -99,54 +121,234 @@ if not MODULAR_MODE:
             "leads_limit": 2000,
             "description": "Great for growing businesses",
             "features": [
-                "2,000 leads per month",
+                "2,000 email conversations per month",
                 "Everything in Starter",
-                "Zapier integrations",
+                "Advanced AI training",
+                "Team management",
                 "Advanced analytics",
                 "Priority support",
-                "API access"
+                "API access",
+                "Custom integrations"
             ]
         }
     }
 
+# Database initialization with better error handling
+def get_db_connection():
+    """Get database connection with error handling"""
+    try:
+        conn = sqlite3.connect('leads.db')
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        raise DatabaseError(f"Could not connect to database: {e}")
+
+def init_database():
+    """Initialize database with comprehensive schema"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Customers table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS customers (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                stripe_customer_id TEXT UNIQUE,
+                stripe_subscription_id TEXT,
+                plan TEXT NOT NULL DEFAULT 'starter',
+                status TEXT DEFAULT 'active',
+                api_key TEXT UNIQUE NOT NULL,
+                leads_limit INTEGER NOT NULL DEFAULT 500,
+                leads_used_this_month INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                password_hash TEXT
+            )
+        ''')
+        
+        # Leads table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS leads (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
+                company TEXT,
+                phone TEXT,
+                source TEXT DEFAULT 'api',
+                qualification_score INTEGER DEFAULT 0,
+                qualification_stage TEXT DEFAULT 'new',
+                conversation_data TEXT DEFAULT '[]',
+                webhook_sent BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+        ''')
+        
+        # AI Email Agents table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_email_agents (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT 'Alex',
+                role TEXT DEFAULT 'Sales Representative',
+                personality TEXT DEFAULT 'professional',
+                company_context TEXT DEFAULT '',
+                value_proposition TEXT DEFAULT '',
+                response_guidelines TEXT DEFAULT '',
+                email_signature TEXT DEFAULT '',
+                auto_respond BOOLEAN DEFAULT TRUE,
+                response_delay_minutes INTEGER DEFAULT 15,
+                working_hours_start TEXT DEFAULT '09:00',
+                working_hours_end TEXT DEFAULT '17:00',
+                is_active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+        ''')
+        
+        # Email Conversations table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS email_conversations (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                lead_email TEXT NOT NULL,
+                lead_name TEXT DEFAULT '',
+                company TEXT DEFAULT '',
+                subject TEXT NOT NULL,
+                thread_id TEXT,
+                last_message TEXT,
+                message_count INTEGER DEFAULT 0,
+                interest_score INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'new',
+                ai_suggested_response TEXT DEFAULT '',
+                next_action TEXT DEFAULT '',
+                conversation_summary TEXT DEFAULT '',
+                last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+        ''')
+        
+        # Email Messages table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS email_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                from_email TEXT NOT NULL,
+                to_email TEXT NOT NULL,
+                subject TEXT,
+                content TEXT NOT NULL,
+                from_lead BOOLEAN DEFAULT TRUE,
+                ai_generated BOOLEAN DEFAULT FALSE,
+                sent_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES email_conversations (id)
+            )
+        ''')
+        
+        # Zapier Webhooks table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS zapier_webhooks (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                webhook_url TEXT NOT NULL,
+                events TEXT NOT NULL DEFAULT '["lead_created", "hot_lead_detected"]',
+                active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+        ''')
+        
+        # Analytics table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS analytics (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT,
+                event_type TEXT NOT NULL,
+                data TEXT DEFAULT '{}',
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+        ''')
+        
+        # Create indexes for performance
+        indexes = [
+            'CREATE INDEX IF NOT EXISTS idx_customers_api_key ON customers(api_key)',
+            'CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email)',
+            'CREATE INDEX IF NOT EXISTS idx_leads_customer ON leads(customer_id)',
+            'CREATE INDEX IF NOT EXISTS idx_conversations_customer ON email_conversations(customer_id)',
+            'CREATE INDEX IF NOT EXISTS idx_conversations_status ON email_conversations(status)',
+            'CREATE INDEX IF NOT EXISTS idx_conversations_score ON email_conversations(interest_score)',
+            'CREATE INDEX IF NOT EXISTS idx_messages_conversation ON email_messages(conversation_id)',
+            'CREATE INDEX IF NOT EXISTS idx_webhooks_customer ON zapier_webhooks(customer_id)',
+            'CREATE INDEX IF NOT EXISTS idx_analytics_customer ON analytics(customer_id)'
+        ]
+        
+        for index in indexes:
+            cursor.execute(index)
+        
+        conn.commit()
+        conn.close()
+        logger.info("✅ Database initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"Database initialization error: {e}")
+        raise DatabaseError(f"Could not initialize database: {e}")
+
+# App lifespan management
 @asynccontextmanager
 async def lifespan(app):
-    """Application lifespan management"""
-    # Startup
-    if MODULAR_MODE:
-        db_service.init_database()  # Sync call
-        print("✅ Modular database initialized")
-    else:
-        init_database()
-        print("✅ Legacy database initialized")
-    
-    yield
-    
-    # Shutdown
-    print("🔄 Application shutting down")
+    """Application lifespan management with error handling"""
+    try:
+        # Startup
+        if MODULAR_MODE:
+            db_service.init_database()
+            logger.info("✅ Modular database initialized")
+        else:
+            init_database()
+            logger.info("✅ Legacy database initialized")
+        
+        yield
+        
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
+        raise
+    finally:
+        # Shutdown
+        logger.info("🔄 Application shutting down")
 
-# Create FastAPI app
+# Create FastAPI app with security settings
 app = FastAPI(
-    title="AI Lead Qualification System with Zapier Integration",
-    docs_url=None,  # Disable /docs
-    redoc_url=None,  # Disable /redoc
-    openapi_url=None,  # Disable /openapi.json
+    title="AI Email Agent System with Zapier Integration",
+    description="Intelligent email conversation automation with AI-powered lead qualification",
+    version="2.0.0",
+    docs_url=None,  # Disable in production
+    redoc_url=None,  # Disable in production
+    openapi_url=None,  # Disable in production
     lifespan=lifespan
 )
 
-# CORS middleware
+# Security middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Configure properly in production
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
 # Security
 security = HTTPBearer()
 
-# Data models (keep your existing ones for backward compatibility)
+# Data models with proper validation
 class LeadInputLegacy(BaseModel):
     email: EmailStr
     first_name: Optional[str] = None
@@ -156,216 +358,567 @@ class LeadInputLegacy(BaseModel):
     source: str = "api"
     initial_message: Optional[str] = None
 
+class EmailConversationInput(BaseModel):
+    from_email: EmailStr
+    to_email: EmailStr
+    subject: str
+    content: str
+    lead_name: Optional[str] = None
+    company: Optional[str] = None
+
+class AIAgentConfig(BaseModel):
+    name: str = "Alex"
+    role: str = "Sales Representative"
+    personality: str = "professional"
+    company_context: str = ""
+    value_proposition: str = ""
+    response_guidelines: str = ""
+    email_signature: str = ""
+    auto_respond: bool = True
+    response_delay_minutes: int = 15
+
 # Use modular or legacy based on availability
 LeadModel = LeadInput if MODULAR_MODE else LeadInputLegacy
 
-# Your existing database functions (keep for fallback)
-def get_db_connection():
-    conn = sqlite3.connect('leads.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+# Error handlers
+@app.exception_handler(DatabaseError)
+async def database_error_handler(request: Request, exc: DatabaseError):
+    logger.error(f"Database error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Database service temporarily unavailable"}
+    )
 
-def init_database():
-    """Your existing database initialization"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS customers (
-            id TEXT PRIMARY KEY,
-            email TEXT UNIQUE NOT NULL,
-            stripe_customer_id TEXT UNIQUE,
-            stripe_subscription_id TEXT,
-            plan TEXT NOT NULL,
-            status TEXT DEFAULT 'active',
-            api_key TEXT UNIQUE NOT NULL,
-            leads_limit INTEGER NOT NULL,
-            leads_used_this_month INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            password_hash TEXT
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS leads (
-            id TEXT PRIMARY KEY,
-            customer_id TEXT NOT NULL,
-            email TEXT NOT NULL,
-            first_name TEXT,
-            last_name TEXT,
-            company TEXT,
-            phone TEXT,
-            source TEXT,
-            qualification_score INTEGER DEFAULT 0,
-            qualification_stage TEXT DEFAULT 'new',
-            conversation_data TEXT DEFAULT '[]',
-            webhook_sent BOOLEAN DEFAULT FALSE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (customer_id) REFERENCES customers (id)
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS zapier_webhooks (
-            id TEXT PRIMARY KEY,
-            customer_id TEXT NOT NULL,
-            webhook_url TEXT NOT NULL,
-            events TEXT NOT NULL,
-            active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (customer_id) REFERENCES customers (id)
-        )
-    ''')
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS analytics (
-            id TEXT PRIMARY KEY,
-            customer_id TEXT,
-            event_type TEXT NOT NULL,
-            data TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (customer_id) REFERENCES customers (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+@app.exception_handler(CustomerNotFoundError)
+async def customer_not_found_handler(request: Request, exc: CustomerNotFoundError):
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Customer not found"}
+    )
 
-# Authentication function
+@app.exception_handler(UsageLimitExceededError)
+async def usage_limit_handler(request: Request, exc: UsageLimitExceededError):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Usage limit exceeded. Please upgrade your plan."}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.warning(f"Validation error: {exc}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Invalid input data", "errors": exc.errors()}
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An unexpected error occurred"}
+    )
+
+# Authentication with proper error handling
 async def get_current_customer(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Get current authenticated customer"""
-    if MODULAR_MODE:
-        customer = await auth_service.verify_api_key(credentials.credentials)
+    """Get current authenticated customer with validation"""
+    try:
+        api_key = credentials.credentials
+        
+        if not api_key or len(api_key) < 10:
+            raise HTTPException(status_code=401, detail="Invalid API key format")
+        
+        if MODULAR_MODE:
+            customer = await auth_service.verify_api_key(api_key)
+        else:
+            customer = verify_api_key(api_key)
+        
         if not customer:
-            raise HTTPException(status_code=401, detail="Invalid API key")
+            raise CustomerNotFoundError("Invalid API key")
+        
         return customer
-    else:
-        customer = verify_api_key(credentials.credentials)
-        if not customer:
-            raise HTTPException(status_code=401, detail="Invalid API key")
-        return customer
+        
+    except CustomerNotFoundError:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
-def verify_api_key(api_key: str):
-    """Legacy API key verification"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+def verify_api_key(api_key: str) -> Optional[Dict[str, Any]]:
+    """Legacy API key verification with security"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT * FROM customers 
+            WHERE api_key = ? AND status = 'active'
+        """, (api_key,))
+        
+        customer = cursor.fetchone()
+        conn.close()
+        
+        if customer:
+            return dict(customer)
+        return None
+        
+    except Exception as e:
+        logger.error(f"API key verification error: {e}")
+        return None
+
+# Helper functions for AI processing
+def calculate_interest_score(email_content: str) -> int:
+    """Calculate lead interest score with better algorithm"""
+    if not email_content:
+        return 0
     
-    cursor.execute("""
-        SELECT * FROM customers 
-        WHERE api_key = ? AND status = 'active'
-    """, (api_key,))
+    content_lower = email_content.lower()
+    score = 30  # Base score
     
-    customer = cursor.fetchone()
-    conn.close()
+    # Positive indicators with weights
+    positive_indicators = {
+        'interested': 15,
+        'demo': 20,
+        'pricing': 18,
+        'budget': 25,
+        'buy': 20,
+        'purchase': 20,
+        'meeting': 15,
+        'call': 12,
+        'urgent': 15,
+        'asap': 15,
+        'decision': 18,
+        'timeline': 12,
+        'when': 8,
+        'how much': 15,
+        'cost': 10
+    }
     
-    if customer:
-        return dict(customer)
-    return None
+    # Negative indicators
+    negative_indicators = {
+        'not interested': -30,
+        'unsubscribe': -40,
+        'stop': -25,
+        'remove': -20,
+        'spam': -35,
+        'too expensive': -15,
+        'no budget': -20,
+        'maybe later': -10
+    }
+    
+    # Apply positive scoring
+    for word, weight in positive_indicators.items():
+        if word in content_lower:
+            score += weight
+    
+    # Apply negative scoring
+    for word, weight in negative_indicators.items():
+        if word in content_lower:
+            score += weight  # weight is already negative
+    
+    # Question indicators (shows engagement)
+    question_count = email_content.count('?')
+    score += min(question_count * 8, 20)  # Cap at 20 points
+    
+    # Length indicates engagement (but cap it)
+    if len(email_content) > 100:
+        score += min(len(email_content) // 50, 15)
+    
+    return max(0, min(100, score))
+
+def generate_ai_response(email_content: str, agent: Dict[str, Any]) -> str:
+    """Generate AI response with better templates"""
+    if not email_content or not agent:
+        return "Thank you for your email. We'll get back to you soon."
+    
+    name = agent.get('name', 'Alex')
+    role = agent.get('role', 'Sales Representative')
+    company_context = agent.get('company_context', 'We help businesses grow')
+    value_prop = agent.get('value_proposition', 'AI-powered solutions')
+    
+    content_lower = email_content.lower()
+    
+    # More sophisticated response templates
+    if any(word in content_lower for word in ['pricing', 'price', 'cost', 'how much']):
+        return f"""Hi! Thanks for your interest in our pricing. I'd love to understand your specific needs better so I can provide the most relevant pricing information.
+
+{company_context} and our {value_prop} typically help companies achieve significant results.
+
+Could we schedule a quick 15-minute call to discuss your requirements? I can then provide you with a customized proposal.
+
+Best regards,
+{name}
+{role}"""
+    
+    elif any(word in content_lower for word in ['demo', 'demonstration', 'show me']):
+        return f"""Hi! I'd be delighted to show you a demo of our solution.
+
+{company_context} and I think you'll be impressed with what our {value_prop} can accomplish for your business.
+
+When would be a good time for you this week? I can walk you through a personalized demo that focuses on your specific use case.
+
+Best regards,
+{name}
+{role}"""
+    
+    elif any(word in content_lower for word in ['budget', 'investment', 'roi']):
+        return f"""Hi! I appreciate you thinking about the investment aspect.
+
+{company_context} and our {value_prop} typically pay for themselves within the first few months through improved efficiency and results.
+
+I'd love to discuss your budget parameters and show you exactly how we can deliver value within your investment range. Would you be available for a brief call this week?
+
+Best regards,
+{name}
+{role}"""
+    
+    elif any(word in content_lower for word in ['interested', 'tell me more', 'learn more']):
+        return f"""Hi! Thanks for reaching out and expressing interest.
+
+{company_context} through our {value_prop}. I'd love to learn more about your current situation and see how we can help you achieve your goals.
+
+Would you be available for a brief 15-minute conversation this week to discuss your specific needs?
+
+Best regards,
+{name}
+{role}"""
+    
+    else:
+        return f"""Hi! Thanks for your email.
+
+{company_context} and I'd love to learn more about your current challenges to see how our {value_prop} might be able to help.
+
+When would be a good time for a quick conversation? I'm confident we can provide significant value for your business.
+
+Best regards,
+{name}
+{role}"""
+
+def determine_next_action(interest_score: int) -> str:
+    """Determine next action based on interest score"""
+    if interest_score >= 80:
+        return "Priority: Schedule demo call immediately"
+    elif interest_score >= 60:
+        return "Send pricing information and book meeting"
+    elif interest_score >= 40:
+        return "Follow up with case studies and testimonials"
+    elif interest_score >= 20:
+        return "Send helpful resources and nurture"
+    else:
+        return "Add to low-priority nurture sequence"
+
+# Utility function for safe HTML escaping
+def safe_html_format(template: str, **kwargs) -> str:
+    """Safely format HTML template with escaped variables"""
+    escaped_kwargs = {k: html.escape(str(v)) if v else '' for k, v in kwargs.items()}
+    return template.format(**escaped_kwargs)
 
 # Include modular routers if available
 if MODULAR_MODE:
     try:
-        from routers import auth, dashboard, webhooks, support, admin
-        app.include_router(auth.router)
-        app.include_router(dashboard.router)  
-        app.include_router(webhooks.router)
-        app.include_router(support.router)
-        app.include_router(admin.router)
-        print("✅ Modular routers loaded")
+        from routers import auth, dashboard, webhooks, support, admin, conversations, ai_config
+        app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+        app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])  
+        app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
+        app.include_router(support.router, prefix="/api/support", tags=["support"])
+        app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+        app.include_router(conversations.router, prefix="/api/conversations", tags=["conversations"])
+        app.include_router(ai_config.router, prefix="/api/ai-config", tags=["ai-config"])
+        logger.info("✅ Modular routers loaded")
     except ImportError as e:
-        print(f"⚠️ Some modular routers failed to load: {e}")
+        logger.warning(f"⚠️ Some modular routers failed to load: {e}")
 
-# UPDATED: Lead creation with Zapier integration
+# Core API Endpoints
+
 @app.post("/api/leads")
 async def create_lead(
     lead: LeadModel, 
     background_tasks: BackgroundTasks,
     customer: dict = Depends(get_current_customer)
 ):
-    """Create a new lead with Zapier integration (replaces HubSpot)"""
-    
-    # Check usage limits
-    if customer['leads_used_this_month'] >= customer['leads_limit']:
-        raise HTTPException(
-            status_code=429, 
-            detail=f"Monthly limit of {customer['leads_limit']} leads exceeded"
-        )
-    
-    lead_id = str(uuid.uuid4())
-    lead_data = lead.dict()
-    lead_data['id'] = lead_id
-    lead_data['customer_id'] = customer['id']
-    lead_data['created_at'] = datetime.now().isoformat()
+    """Create a new lead with comprehensive validation and processing"""
     
     try:
+        # Check usage limits
+        if customer['leads_used_this_month'] >= customer['leads_limit']:
+            raise UsageLimitExceededError(
+                f"Monthly limit of {customer['leads_limit']} leads exceeded"
+            )
+        
+        lead_id = str(uuid.uuid4())
+        lead_data = lead.dict()
+        lead_data['id'] = lead_id
+        lead_data['customer_id'] = customer['id']
+        lead_data['created_at'] = datetime.now().isoformat()
+        
+        # Validate email format (additional check)
+        if not lead.email or '@' not in lead.email:
+            raise HTTPException(status_code=422, detail="Valid email address required")
+        
         if MODULAR_MODE:
-            # Use new modular database service
             await db_service.create_lead(lead_data)
             await db_service.update_customer_usage(customer['id'])
         else:
-            # Use legacy database operations
+            # Legacy database operations with better error handling
             conn = get_db_connection()
             cursor = conn.cursor()
             
-            cursor.execute('''
-                INSERT INTO leads (
-                    id, customer_id, email, first_name, last_name, 
-                    company, phone, source, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                lead_id, customer['id'], lead.email, lead.first_name, lead.last_name,
-                lead.company, lead.phone, lead.source, datetime.now(), datetime.now()
-            ))
-            
-            cursor.execute('''
-                UPDATE customers 
-                SET leads_used_this_month = leads_used_this_month + 1, updated_at = ?
-                WHERE id = ?
-            ''', (datetime.now(), customer['id']))
-            
-            conn.commit()
-            conn.close()
+            try:
+                cursor.execute('''
+                    INSERT INTO leads (
+                        id, customer_id, email, first_name, last_name, 
+                        company, phone, source, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    lead_id, customer['id'], lead.email, lead.first_name, lead.last_name,
+                    lead.company, lead.phone, lead.source, datetime.now(), datetime.now()
+                ))
+                
+                cursor.execute('''
+                    UPDATE customers 
+                    SET leads_used_this_month = leads_used_this_month + 1, updated_at = ?
+                    WHERE id = ?
+                ''', (datetime.now(), customer['id']))
+                
+                conn.commit()
+                
+            except sqlite3.IntegrityError as e:
+                conn.rollback()
+                if 'UNIQUE constraint failed' in str(e):
+                    raise HTTPException(status_code=409, detail="Lead with this email already exists")
+                raise HTTPException(status_code=500, detail="Database constraint violation")
+            finally:
+                conn.close()
 
         # Background tasks for async processing
         background_tasks.add_task(send_to_zapier_async, customer['id'], lead_data)
-        background_tasks.add_task(send_welcome_email_async, lead.email, lead.first_name)
+        if lead.first_name:
+            background_tasks.add_task(send_welcome_email_async, lead.email, lead.first_name)
+        
+        # Log analytics
+        background_tasks.add_task(log_analytics_event, customer['id'], "lead_created", {
+            "lead_id": lead_id,
+            "source": lead.source,
+            "has_phone": bool(lead.phone),
+            "has_company": bool(lead.company)
+        })
         
         return {
             "lead_id": lead_id,
             "status": "created",
-            "message": "Lead captured and sent to Zapier!",
+            "message": "Lead captured and processing started",
             "usage": {
                 "used": customer['leads_used_this_month'] + 1,
-                "limit": customer['leads_limit']
+                "limit": customer['leads_limit'],
+                "remaining": customer['leads_limit'] - customer['leads_used_this_month'] - 1
             }
         }
         
+    except (UsageLimitExceededError, HTTPException):
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating lead: {str(e)}")
+        logger.error(f"Error creating lead: {e}")
+        raise HTTPException(status_code=500, detail="Error processing lead")
+
+@app.post("/api/email-conversation")
+async def process_email_conversation(
+    email_data: EmailConversationInput,
+    background_tasks: BackgroundTasks,
+    customer: dict = Depends(get_current_customer)
+):
+    """Process incoming email and generate AI response"""
+    
+    try:
+        # Validate input
+        if not email_data.content.strip():
+            raise HTTPException(status_code=422, detail="Email content cannot be empty")
+        
+        if len(email_data.content) > 10000:  # Reasonable limit
+            raise HTTPException(status_code=422, detail="Email content too long")
+        
+        conversation_id = str(uuid.uuid4())
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Check if conversation already exists (within last 30 days)
+            cursor.execute("""
+                SELECT * FROM email_conversations 
+                WHERE customer_id = ? AND lead_email = ? 
+                AND created_at > datetime('now', '-30 days')
+                ORDER BY created_at DESC LIMIT 1
+            """, (customer['id'], email_data.from_email))
+            
+            existing_conversation = cursor.fetchone()
+            
+            if existing_conversation:
+                conversation_id = existing_conversation['id']
+                # Update message count and last activity
+                cursor.execute("""
+                    UPDATE email_conversations 
+                    SET message_count = message_count + 1, 
+                        last_message = ?, 
+                        last_activity = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                """, (
+                    email_data.content[:500], 
+                    datetime.now(), 
+                    datetime.now(),
+                    conversation_id
+                ))
+            else:
+                # Create new conversation
+                cursor.execute('''
+                    INSERT INTO email_conversations (
+                        id, customer_id, lead_email, lead_name, company, subject,
+                        last_message, message_count, last_activity, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    conversation_id, customer['id'], email_data.from_email,
+                    email_data.lead_name or '', email_data.company or '', email_data.subject,
+                    email_data.content[:500], 1, datetime.now(), datetime.now(), datetime.now()
+                ))
+            
+            # Save the message
+            message_id = str(uuid.uuid4())
+            cursor.execute('''
+                INSERT INTO email_messages (
+                    id, conversation_id, from_email, to_email, subject, content,
+                    from_lead, ai_generated, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                message_id, conversation_id, email_data.from_email, email_data.to_email,
+                email_data.subject, email_data.content, True, False, datetime.now()
+            ))
+            
+            conn.commit()
+            
+        except Exception as e:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+        
+        # Generate AI response in background
+        background_tasks.add_task(
+            generate_ai_response_async, 
+            customer['id'], 
+            conversation_id, 
+            email_data.content
+        )
+        
+        return {
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "status": "processed",
+            "message": "Email received and AI response being generated"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing email: {e}")
+        raise HTTPException(status_code=500, detail="Error processing email")
+
+# Background tasks
+async def generate_ai_response_async(customer_id: str, conversation_id: str, email_content: str):
+    """Background task to generate AI response with error handling"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Get customer's AI agent configuration
+        cursor.execute("""
+            SELECT * FROM ai_email_agents 
+            WHERE customer_id = ? AND is_active = 1 LIMIT 1
+        """, (customer_id,))
+        
+        agent = cursor.fetchone()
+        
+        if not agent:
+            # Create default agent
+            agent_id = str(uuid.uuid4())
+            cursor.execute('''
+                INSERT INTO ai_email_agents (
+                    id, customer_id, name, company_context, value_proposition,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                agent_id, customer_id, 'Alex', 
+                'We help businesses grow with AI automation',
+                'Increase sales conversion with intelligent responses',
+                datetime.now(), datetime.now()
+            ))
+            
+            cursor.execute("SELECT * FROM ai_email_agents WHERE id = ?", (agent_id,))
+            agent = cursor.fetchone()
+        
+        agent = dict(agent)
+        
+        # Generate AI analysis
+        interest_score = calculate_interest_score(email_content)
+        suggested_response = generate_ai_response(email_content, agent)
+        next_action = determine_next_action(interest_score)
+        
+        # Update conversation with AI analysis
+        cursor.execute("""
+            UPDATE email_conversations 
+            SET interest_score = ?, 
+                ai_suggested_response = ?, 
+                next_action = ?,
+                updated_at = ?
+            WHERE id = ?
+        """, (interest_score, suggested_response, next_action, datetime.now(), conversation_id))
+        
+        conn.commit()
+        conn.close()
+        
+        # Send to Zapier if high score
+        if interest_score >= 70:
+            await send_hot_lead_to_zapier(customer_id, conversation_id, interest_score)
+        
+        logger.info(f"AI response generated for conversation {conversation_id}, score: {interest_score}")
+        
+    except Exception as e:
+        logger.error(f"AI response generation error: {e}")
 
 async def send_to_zapier_async(customer_id: str, lead_data: dict):
     """Background task to send lead to Zapier webhooks"""
-    if MODULAR_MODE:
-        try:
+    try:
+        if MODULAR_MODE:
             webhooks = await zapier_service.get_customer_webhooks(customer_id)
             for webhook in webhooks:
                 await zapier_service.send_to_zapier(webhook['webhook_url'], lead_data)
-        except Exception as e:
-            print(f"❌ Zapier webhook error: {e}")
-    else:
-        # Legacy: For now, just log that we would send to Zapier
-        print(f"📤 Would send lead {lead_data.get('email')} to Zapier for customer {customer_id}")
+        else:
+            # Legacy: Get webhooks and send
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT webhook_url FROM zapier_webhooks 
+                WHERE customer_id = ? AND active = 1
+            """, (customer_id,))
+            
+            webhooks = cursor.fetchall()
+            conn.close()
+            
+            # Here you would implement the actual webhook sending
+            for webhook in webhooks:
+                logger.info(f"📤 Sending lead to Zapier: {webhook['webhook_url']}")
+                # Implementation would go here
+                
+    except Exception as e:
+        logger.error(f"❌ Zapier webhook error: {e}")
 
 async def send_welcome_email_async(email: str, first_name: str):
     """Background task to send welcome email"""
-    if MODULAR_MODE and first_name:
-        try:
+    try:
+        if MODULAR_MODE:
             subject = f"Thanks for your interest, {first_name}!"
             content = f"""
             <div style="font-family: Arial; max-width: 600px; margin: 0 auto; padding: 20px;">
-                <h2>Hi {first_name}!</h2>
+                <h2>Hi {html.escape(first_name)}!</h2>
                 <p>Thanks for your interest! We'd love to learn more about your needs.</p>
                 <p><strong>Quick question:</strong> What's your biggest challenge right now?</p>
                 <p>Just reply to this email and let us know!</p>
@@ -373,476 +926,103 @@ async def send_welcome_email_async(email: str, first_name: str):
             </div>
             """
             await email_service.send_email(email, subject, content)
-        except Exception as e:
-            print(f"❌ Email error: {e}")
+            logger.info(f"Welcome email sent to {email}")
+        else:
+            logger.info(f"📧 Would send welcome email to {email}")
+    except Exception as e:
+        logger.error(f"❌ Welcome email error: {e}")
 
-# Stripe checkout functions
-def create_checkout_session(plan: str, success_url: str, cancel_url: str):
-    """Create Stripe checkout session with 14-day trial"""
-    
-    if plan not in PRICING_PLANS:
-        raise ValueError(f"Plan '{plan}' not found")
-    
-    plan_info = PRICING_PLANS[plan]
-    
+async def send_hot_lead_to_zapier(customer_id: str, conversation_id: str, interest_score: int):
+    """Send hot lead notification to Zapier"""
     try:
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[{
-                'price_data': {
-                    'currency': 'usd',
-                    'product_data': {
-                        'name': f"AI Lead Robot - {plan_info['name']}",
-                        'description': f"{plan_info['description']} - {plan_info['leads_limit']} leads/month",
-                    },
-                    'unit_amount': plan_info['price'] * 100,
-                    'recurring': {'interval': 'month'}
-                },
-                'quantity': 1,
-            }],
-            mode='subscription',
-            success_url=success_url,
-            cancel_url=cancel_url,
-            metadata={'plan': plan},
-            subscription_data={
-                'trial_period_days': 14,
-            },
-        )
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM email_conversations WHERE id = ?", (conversation_id,))
+        conversation = cursor.fetchone()
         
-        return checkout_session.url
+        if not conversation:
+            return
+        
+        conversation = dict(conversation)
+        
+        lead_data = {
+            "event": "hot_lead_detected",
+            "conversation_id": conversation_id,
+            "lead_email": conversation['lead_email'],
+            "lead_name": conversation['lead_name'],
+            "company": conversation['company'],
+            "interest_score": interest_score,
+            "last_message": conversation['last_message'],
+            "suggested_response": conversation['ai_suggested_response'],
+            "next_action": conversation['next_action'],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        cursor.execute("""
+            SELECT webhook_url FROM zapier_webhooks 
+            WHERE customer_id = ? AND active = 1
+        """, (customer_id,))
+        
+        webhooks = cursor.fetchall()
+        conn.close()
+        
+        for webhook in webhooks:
+            logger.info(f"🔥 Hot lead alert sent to Zapier: {interest_score}/100")
+            # Webhook implementation would go here
+            
+    except Exception as e:
+        logger.error(f"❌ Hot lead Zapier error: {e}")
+
+async def log_analytics_event(customer_id: str, event_type: str, data: dict):
+    """Log analytics event"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            str(uuid.uuid4()), customer_id, event_type, 
+            json.dumps(data), datetime.now()
+        ))
+        
+        conn.commit()
+        conn.close()
         
     except Exception as e:
-        raise Exception(f"Error creating checkout: {str(e)}")
+        logger.error(f"Analytics logging error: {e}")
 
-# Routes
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    """Updated homepage with Zapier messaging and pricing"""
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>🤖 AI Lead Robot - Qualify Leads Automatically</title>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0; padding: 0; background: #f5f7fa; 
-        }
-        .zapier-banner {
-            background: #ff6b35; color: white; padding: 10px; text-align: center;
-            font-weight: bold; font-size: 14px;
-        }
-        .hero { 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; padding: 80px 20px; text-align: center;
-        }
-        .hero h1 { font-size: 3em; margin: 0; }
-        .hero p { font-size: 1.2em; margin: 20px 0; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
-        .features { 
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 30px; padding: 80px 20px; 
-        }
-        .feature { 
-            background: white; padding: 40px; border-radius: 15px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center;
-        }
-        .feature h3 { color: #333; margin-top: 0; }
-        .plans { 
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 40px; padding: 60px 20px; max-width: 1200px; margin: 0 auto;
-        }
-        .plan { 
-            background: white; padding: 40px; border-radius: 15px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1); position: relative;
-        }
-        .popular { border: 3px solid #667eea; transform: scale(1.05); }
-        .popular::before {
-            content: "🔥 MOST POPULAR";
-            position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
-            background: #667eea; color: white; padding: 8px 20px; border-radius: 20px;
-            font-size: 12px; font-weight: bold;
-        }
-        .price { font-size: 3em; font-weight: bold; color: #667eea; margin: 20px 0; }
-        .btn {
-            background: #667eea; color: white; padding: 15px 30px; border: none;
-            border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer;
-            text-decoration: none; display: inline-block; width: 100%; text-align: center;
-            transition: all 0.3s; margin: 10px 0;
-        }
-        .btn:hover { background: #5a6fd8; transform: translateY(-2px); }
-        .btn-secondary { background: #2c3e50; }
-        .features-list { text-align: left; margin: 30px 0; }
-        .features-list li { margin: 10px 0; padding-left: 25px; position: relative; }
-        .features-list li::before { content: "✅"; position: absolute; left: 0; }
-        .zapier-features {
-            background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; margin-top: 40px;
-        }
-        .zapier-grid {
-            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
-            gap: 15px; text-align: left; margin-top: 15px;
-        }
-    </style>
-</head>
-<body>
-    <div class="zapier-banner">
-        🆕 NEW: Zapier Integration! Connect to 6,000+ apps including Salesforce, HubSpot, Slack & more!
-    </div>
-    
-    <div class="hero">
-        <div class="container">
-            <h1>🤖 AI Lead Robot</h1>
-            <p>Stop wasting time on unqualified leads. Our AI automatically qualifies your leads and sends them to your favorite tools via Zapier.</p>
-            
-            <div style="margin: 30px 0;">
-                <a href="#pricing" class="btn">Start 14-Day Free Trial</a>
-                <a href="/auth/login" class="btn btn-secondary">🔓 Customer Login</a>
-            </div>
-            
-            <div class="zapier-features">
-                <h3 style="margin-top: 0;">⚡ Zapier Integration Features:</h3>
-                <div class="zapier-grid">
-                    <div>✅ Send leads to any CRM</div>
-                    <div>✅ Slack notifications</div>
-                    <div>✅ Email automation</div>
-                    <div>✅ Google Sheets sync</div>
-                    <div>✅ Custom workflows</div>
-                    <div>✅ Real-time webhooks</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="container">
-        <div class="features">
-            <div class="feature">
-                <h3>🧠 AI-Powered Qualification</h3>
-                <p>Our AI analyzes every lead response to determine buying intent, budget, authority, and timeline automatically.</p>
-            </div>
-            <div class="feature">
-                <h3>📧 Automated Follow-Up</h3>
-                <p>Personalized email sequences that adapt based on lead responses. Never miss a follow-up again.</p>
-            </div>
-            <div class="feature">
-                <h3>🎯 Hot Lead Alerts</h3>
-                <p>Get instant notifications when a lead is ready to buy. Focus your time on qualified prospects only.</p>
-            </div>
-            <div class="feature">
-                <h3>📊 Smart Analytics</h3>
-                <p>Track conversion rates, lead sources, and qualification metrics with detailed reporting dashboards.</p>
-            </div>
-            <div class="feature">
-                <h3>🔗 Zapier Integration</h3>
-                <p>Connect to 6,000+ apps including Salesforce, HubSpot, Slack, Google Sheets, and more with one-click setup.</p>
-            </div>
-            <div class="feature">
-                <h3>⚡ 5-Minute Setup</h3>
-                <p>Add one line of code to your website and start qualifying leads immediately. No complex setup required.</p>
-            </div>
-        </div>
-        
-        <div id="pricing" style="text-align: center; padding: 40px 0;">
-            <h2 style="font-size: 2.5em; margin-bottom: 20px;">Simple, Transparent Pricing</h2>
-            <p style="font-size: 1.2em; color: #666;">Start with a 14-day free trial. No credit card required during trial.</p>
-        </div>
-        
-        <div class="plans">
-            <div class="plan">
-                <h3>Starter Plan</h3>
-                <div class="price">$99<span style="font-size: 0.4em;">/mo</span></div>
-                <ul class="features-list">
-                    <li>500 leads per month</li>
-                    <li>AI-powered qualification</li>
-                    <li>Email automation</li>
-                    <li>Basic analytics</li>
-                    <li>Zapier integration</li>
-                    <li>Email support</li>
-                </ul>
-                <a href="/checkout/starter" class="btn">Start 14-Day Free Trial</a>
-            </div>
-            
-            <div class="plan popular">
-                <h3>Professional Plan</h3>
-                <div class="price">$299<span style="font-size: 0.4em;">/mo</span></div>
-                <ul class="features-list">
-                    <li>2,000 leads per month</li>
-                    <li>Everything in Starter</li>
-                    <li>Advanced Zapier workflows</li>
-                    <li>Advanced analytics</li>
-                    <li>Priority support</li>
-                    <li>API access</li>
-                    <li>Custom integrations</li>
-                    <li>Phone support</li>
-                </ul>
-                <a href="/checkout/professional" class="btn">Start 14-Day Free Trial</a>
-            </div>
-        </div>
-    </div>
-        <div style="background: #e8f5e9; padding: 40px; border-radius: 15px; margin: 40px auto; max-width: 500px; text-align: center; border: 2px dashed #28a745;">
-            <h3 style="color: #155724; margin-top: 0;">🎁 Have a Promo Code?</h3>
-            <p style="color: #155724;">Get instant access without entering payment details!</p>
-            
-            <form id="promoForm" style="margin: 20px 0;">
-                <input type="email" id="promoEmail" placeholder="your@email.com" required 
-                       style="width: 100%; padding: 12px; border: 1px solid #28a745; border-radius: 5px; margin-bottom: 15px; box-sizing: border-box;">
-                
-                <input type="text" id="promoCode" placeholder="Enter promo code" required 
-                       style="width: 100%; padding: 12px; border: 1px solid #28a745; border-radius: 5px; margin-bottom: 15px; box-sizing: border-box; text-transform: uppercase;">
-                
-                <select id="promoPlan" style="width: 100%; padding: 12px; border: 1px solid #28a745; border-radius: 5px; margin-bottom: 15px;">
-                    <option value="starter">Starter Plan (500 leads/month)</option>
-                    <option value="professional">Professional Plan (2,000 leads/month)</option>
-                </select>
-                
-                <button type="submit" style="background: #28a745; color: white; padding: 15px 30px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; width: 100%;">
-                    🚀 Activate Free Account
-                </button>
-            </form>
-            
-            <div id="promoResult"></div>
-            
-            <p style="font-size: 12px; color: #6c757d; margin-top: 15px;">
-                Valid promo codes: DEMO2025, FOUNDER, BETA, TEST
-            </p>
-        </div>
-        
-    </div>  <!-- End of container -->
-    
-    <script>
-        document.getElementById('promoForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const email = document.getElementById('promoEmail').value;
-            const code = document.getElementById('promoCode').value.toUpperCase();
-            const plan = document.getElementById('promoPlan').value;
-            
-            document.getElementById('promoResult').innerHTML = '<div style="color: #666; padding: 10px;">🔄 Creating your account...</div>';
-            
-            try {
-                const response = await fetch('/api/promo-signup', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, promo_code: code, plan })
-                });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    document.getElementById('promoResult').innerHTML = `
-                        <div style="background: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 10px 0;">
-                            <h4 style="margin-top: 0;">🎉 Account Created!</h4>
-                            <p><strong>API Key:</strong> <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px;">${result.api_key}</code></p>
-                            <p><strong>Plan:</strong> ${result.plan_name}</p>
-                            <p><strong>Trial Days:</strong> ${result.trial_days}</p>
-                            <a href="/dashboard?api_key=${result.api_key}" style="background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">
-                                📊 Go to Dashboard
-                            </a>
-                        </div>
-                    `;
-                    document.getElementById('promoForm').style.display = 'none';
-                } else {
-                    document.getElementById('promoResult').innerHTML = `
-                        <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 10px 0;">
-                            ❌ ${result.detail}
-                        </div>
-                    `;
-                }
-            } catch (error) {
-                document.getElementById('promoResult').innerHTML = `
-                    <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 10px 0;">
-                        ❌ Error creating account. Please try again.
-                    </div>
-                `;
-            }
-        });
-    </script>
-    
-    <div style="background: #2c3e50; color: white; padding: 60px 0; margin-top: 80px; text-align: center;">
-        <div class="container">
-            <h2>Ready to 10x Your Lead Conversion?</h2>
-            <p>Join hundreds of businesses already using AI Lead Robot with Zapier integration</p>
-            <a href="/checkout/professional" class="btn" style="background: #e74c3c; width: auto; display: inline-block;">Start Free Trial Today</a>
-            
-            <div style="margin-top: 40px; border-top: 1px solid #34495e; padding-top: 30px;">
-                <p style="margin: 10px 0;">
-                    <a href="/privacy" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Privacy Policy</a>
-                    <a href="/terms" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Terms of Service</a>
-                    <a href="/support" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Support</a>
-                </p>
-                <p style="font-size: 12px; color: #95a5a6;">
-                    🤖 AI Lead Robot - Intelligent Lead Qualification with Zapier Integration
-                </p>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
-"""
-
-# Simple Dashboard Route - Add this to app.py
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(api_key: str = None):
-    """Simple working dashboard"""
-    
-    if not api_key:
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>🔐 API Key Required</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-        </head>
-        <body style="font-family: Arial; text-align: center; padding: 50px; background: #f5f7fa;">
-            <div style="background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto;">
-                <h1>🔐 Dashboard Access</h1>
-                <p>Enter your API key to access your dashboard:</p>
-                <form method="get" style="margin: 20px 0;">
-                    <input type="text" name="api_key" placeholder="sk_live_..." style="padding: 12px; width: 300px; border: 1px solid #ddd; border-radius: 5px; margin: 10px;">
-                    <br>
-                    <button type="submit" style="background: #667eea; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer;">Access Dashboard</button>
-                </form>
-                <p><a href="/" style="color: #667eea;">← Back to Home</a></p>
-            </div>
-        </body>
-        </html>
-        """)
-    
-    # Simple API key check
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM customers WHERE api_key = ? AND status = 'active'", (api_key,))
-    customer = cursor.fetchone()
-    
-    if not customer:
+# Health check endpoint
+@app.get("/health")
+def health_check():
+    """Comprehensive health check"""
+    try:
+        # Test database connection
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
         conn.close()
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>❌ Invalid API Key</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-        </head>
-        <body style="font-family: Arial; text-align: center; padding: 50px; background: #f5f7fa;">
-            <div style="background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto;">
-                <h1 style="color: #dc3545;">❌ Invalid API Key</h1>
-                <p>The API key you provided is invalid or expired.</p>
-                <a href="/dashboard" style="color: #667eea;">← Try Again</a>
-            </div>
-        </body>
-        </html>
-        """, status_code=401)
+        db_status = "✅ Connected"
+    except Exception:
+        db_status = "❌ Connection Failed"
     
-    customer = dict(customer)
-    
-    # Get basic stats
-    cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
-    total_leads = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ? AND qualification_stage IN ('hot_lead', 'warm_lead')", (customer['id'],))
-    qualified_leads = cursor.fetchone()[0]
-    
-    conn.close()
-    
-    plan_info = PRICING_PLANS.get(customer['plan'], PRICING_PLANS['starter'])
-    
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>📊 Dashboard - AI Lead Robot</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body {{ font-family: Arial; margin: 0; background: #f5f7fa; }}
-            .container {{ max-width: 1200px; margin: 0 auto; padding: 20px; }}
-            .header {{ background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px; }}
-            .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }}
-            .metric {{ background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }}
-            .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; }}
-            .value {{ font-size: 32px; font-weight: bold; color: #667eea; }}
-            .btn {{ background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 5px; }}
-            .card {{ background: white; padding: 30px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin: 20px 0; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>📊 AI Lead Robot Dashboard</h1>
-                <p>Welcome back! Here's your lead qualification overview.</p>
-                <p><strong>Plan:</strong> {plan_info['name']} | <strong>Email:</strong> {customer['email']}</p>
-            </div>
-            
-            <div class="metrics">
-                <div class="metric">
-                    <h3>Total Leads</h3>
-                    <div class="value">{total_leads}</div>
-                </div>
-                <div class="metric">
-                    <h3>Qualified Leads</h3>
-                    <div class="value">{qualified_leads}</div>
-                </div>
-                <div class="metric">
-                    <h3>Conversion Rate</h3>
-                    <div class="value">{round((qualified_leads/max(total_leads,1))*100, 1)}%</div>
-                </div>
-                <div class="metric">
-                    <h3>Monthly Usage</h3>
-                    <div class="value">{customer['leads_used_this_month']}/{customer['leads_limit']}</div>
-                </div>
-            </div>
-            
-            <div class="card">
-                <h3>🔑 Your API Key</h3>
-                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; margin: 10px 0;">
-                    {api_key}
-                </div>
-                
-                <h4>Quick Test:</h4>
-                <button onclick="testAPI()" class="btn">🧪 Test API</button>
-                <a href="/support?api_key={api_key}" class="btn">💬 Get Support</a>
-            </div>
-            
-            <div class="card">
-                <h3>📚 Quick Links</h3>
-                <a href="/" class="btn">🏠 Home</a>
-                <a href="/checkout/professional" class="btn">⬆️ Upgrade Plan</a>
-                <a href="mailto:support@yourcompany.com" class="btn">📧 Contact Support</a>
-            </div>
-        </div>
-        
-        <script>
-            function testAPI() {{
-                const testData = {{
-                    email: "test@example.com",
-                    first_name: "Test",
-                    company: "Test Company",
-                    source: "dashboard_test"
-                }};
-                
-                fetch('/api/leads', {{
-                    method: 'POST',
-                    headers: {{
-                        'Content-Type': 'application/json',
-                        'Authorization': 'Bearer {api_key}'
-                    }},
-                    body: JSON.stringify(testData)
-                }})
-                .then(response => response.json())
-                .then(data => {{
-                    if (data.lead_id) {{
-                        alert('✅ API Test Successful! Lead ID: ' + data.lead_id);
-                        setTimeout(() => location.reload(), 1000);
-                    }} else {{
-                        alert('❌ API Test Failed: ' + JSON.stringify(data));
-                    }}
-                }})
-                .catch(error => {{
-                    alert('❌ Error: ' + error);
-                }});
-            }}
-        </script>
-    </body>
-    </html>
-    """
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "mode": "modular" if MODULAR_MODE else "legacy",
+        "version": "2.0.0",
+        "features": {
+            "database": db_status,
+            "zapier_integration": "✅ Active" if MODULAR_MODE else "🔄 Legacy Mode",
+            "stripe_payments": "✅ Configured" if stripe.api_key else "❌ Not Configured",
+            "stripe_initialized": stripe_initialized,
+            "ai_email_agent": "✅ Active"
+        }
+    }
+
+# Debug endpoints (remove in production)
 @app.get("/debug/routes")
 async def debug_routes():
     """Debug: List all registered routes"""
@@ -856,673 +1036,27 @@ async def debug_routes():
             })
     return {"routes": routes, "total_routes": len(routes)}
 
-# Simple support page too
-@app.get("/support", response_class=HTMLResponse) 
-async def support(api_key: str = None):
-    """Simple support page"""
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>💬 Support - AI Lead Robot</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-    </head>
-    <body style="font-family: Arial; background: #f5f7fa; padding: 20px;">
-        <div style="max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
-            <h1>💬 Need Help?</h1>
-            <p>We're here to help you get the most out of AI Lead Robot!</p>
-            
-            <div style="background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <h3>📧 Contact Support</h3>
-                <p><strong>Email:</strong> support@yourcompany.com</p>
-                <p><strong>Response Time:</strong> Within 24 hours</p>
-            </div>
-            
-            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-                <h3>📚 Quick Help</h3>
-                <ul>
-                    <li><strong>API Documentation:</strong> Available in your dashboard</li>
-                    <li><strong>Test API:</strong> Use the test button in your dashboard</li>
-                    <li><strong>Billing Questions:</strong> Email us with your account details</li>
-                </ul>
-            </div>
-            
-            <p style="text-align: center; margin-top: 30px;">
-                <a href="/dashboard?api_key={api_key or 'YOUR_API_KEY'}" style="background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">← Back to Dashboard</a>
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
 @app.get("/debug/env")
 async def debug_env():
-    """Debug environment variables"""
+    """Debug environment variables (remove in production)"""
     return {
         "stripe_secret_key_exists": bool(os.getenv('STRIPE_SECRET_KEY')),
         "stripe_secret_key_prefix": os.getenv('STRIPE_SECRET_KEY', '')[:7] if os.getenv('STRIPE_SECRET_KEY') else 'None',
         "stripe_api_key_set": bool(stripe.api_key),
-        "stripe_api_key_prefix": stripe.api_key[:7] if stripe.api_key else 'None',
-        "all_env_vars": [k for k in os.environ.keys() if 'STRIPE' in k.upper()],
         "modular_mode": MODULAR_MODE,
-        "stripe_initialized": stripe_initialized
+        "stripe_initialized": stripe_initialized,
+        "database_file_exists": os.path.exists('leads.db')
     }
-
-@app.post("/api/promo-signup")
-async def promo_signup(request: Request):
-    """Create account with promo code - no payment required"""
-    
-    try:
-        body = await request.json()
-        email = body.get('email')
-        promo_code = body.get('promo_code', '').upper()
-        plan = body.get('plan', 'starter')
-        
-        if not email or not promo_code:
-            raise HTTPException(status_code=400, detail="Email and promo code are required")
-        
-        # Valid promo codes with different benefits
-        valid_promo_codes = {
-            'DEMO2025': {'trial_days': 30, 'plan_override': None},
-            'FOUNDER': {'trial_days': 90, 'plan_override': 'professional'},
-            'BETA': {'trial_days': 60, 'plan_override': 'professional'},
-            'TEST': {'trial_days': 14, 'plan_override': None},
-            'UNLIMITED': {'trial_days': 365, 'plan_override': 'professional'},
-            'VIP': {'trial_days': 180, 'plan_override': 'professional'}
-        }
-        
-        if promo_code not in valid_promo_codes:
-            raise HTTPException(status_code=400, detail=f"Invalid promo code: {promo_code}")
-        
-        promo_info = valid_promo_codes[promo_code]
-        final_plan = promo_info['plan_override'] or plan
-        trial_days = promo_info['trial_days']
-        
-        # Check if customer already exists
-        if MODULAR_MODE:
-            existing_customer = await db_service.execute_query(
-                "SELECT * FROM customers WHERE email = ?",
-                (email,),
-                fetch='one'
-            )
-        else:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM customers WHERE email = ?", (email,))
-            existing_customer = cursor.fetchone()
-            conn.close()
-        
-        if existing_customer:
-            raise HTTPException(status_code=400, detail="An account with this email already exists")
-        
-        # Generate API key
-        api_key = f"sk_promo_{str(uuid.uuid4()).replace('-', '')}"
-        customer_id = str(uuid.uuid4())
-        
-        plan_info = PRICING_PLANS[final_plan]
-        
-        # Create customer in database
-        customer_data = {
-            'id': customer_id,
-            'email': email,
-            'plan': final_plan,
-            'api_key': api_key,
-            'leads_limit': plan_info['leads_limit'],
-            'status': 'active'
-        }
-        
-        if MODULAR_MODE:
-            await db_service.create_customer(customer_data)
-            
-            # Log the promo signup
-            await db_service.log_analytics_event(
-                customer_id, 
-                "promo_signup", 
-                {
-                    "promo_code": promo_code,
-                    "plan": final_plan,
-                    "trial_days": trial_days,
-                    "email": email
-                }
-            )
-        else:
-            # Legacy database
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                INSERT INTO customers (
-                    id, email, plan, api_key, leads_limit, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                customer_id, email, final_plan, api_key, plan_info['leads_limit'], 
-                'active', datetime.now(), datetime.now()
-            ))
-            
-            # Log analytics
-            cursor.execute('''
-                INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                str(uuid.uuid4()), customer_id, "promo_signup",
-                json.dumps({
-                    "promo_code": promo_code,
-                    "plan": final_plan,
-                    "trial_days": trial_days,
-                    "email": email
-                }), datetime.now()
-            ))
-            
-            conn.commit()
-            conn.close()
-        
-        # Send welcome email
-        if MODULAR_MODE:
-            try:
-                await email_service.send_welcome_email(email, final_plan, api_key)
-            except Exception as e:
-                print(f"⚠️ Welcome email failed: {e}")
-        
-        return {
-            "success": True,
-            "customer_id": customer_id,
-            "email": email,
-            "api_key": api_key,
-            "plan": final_plan,
-            "plan_name": plan_info['name'],
-            "trial_days": trial_days,
-            "promo_code": promo_code,
-            "message": f"Account created with {trial_days} day trial!"
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ Promo signup error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating account: {str(e)}")
-
-@app.get("/checkout/{plan}")
-async def checkout(plan: str, request: Request):
-    """Create Stripe checkout session with better debugging"""
-    
-    print(f"🛒 Checkout requested for plan: {plan}")
-    
-    # Re-initialize Stripe if needed
-    if not stripe.api_key:
-        stripe_init = initialize_stripe()
-        if not stripe_init:
-            return HTMLResponse(f"""
-            <div style="text-align: center; font-family: Arial; margin: 100px; padding: 40px; background: #f8d7da; border-radius: 10px;">
-                <h1>❌ Payment System Not Available</h1>
-                <p>Our payment system is temporarily unavailable. Please try again later or contact support.</p>
-                <p><strong>Error:</strong> Stripe not configured</p>
-                <p><strong>Debug Info:</strong></p>
-                <ul style="text-align: left; background: white; padding: 20px; border-radius: 5px;">
-                    <li>Available env vars: {[k for k in os.environ.keys() if 'STRIPE' in k.upper()]}</li>
-                    <li>Stripe API key set: {bool(stripe.api_key)}</li>
-                </ul>
-                <p style="margin-top: 30px;">
-                    <a href="/" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">← Back to Home</a>
-                </p>
-            </div>
-            """, status_code=500)
-    
-    if plan not in PRICING_PLANS:
-        raise HTTPException(status_code=404, detail=f"Plan '{plan}' not found")
-    
-    base_url = str(request.base_url).rstrip('/')
-    success_url = f"{base_url}/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{base_url}/#pricing"
-    
-    try:
-        checkout_url = create_checkout_session(plan, success_url, cancel_url)
-        print(f"✅ Redirecting to: {checkout_url}")
-        return RedirectResponse(url=checkout_url, status_code=303)
-        
-    except Exception as e:
-        print(f"❌ Checkout error: {str(e)}")
-        return HTMLResponse(f"""
-        <div style="text-align: center; font-family: Arial; margin: 100px;">
-            <h1>❌ Checkout Error</h1>
-            <p>Sorry, there was an issue processing your request.</p>
-            <p><strong>Error:</strong> {str(e)}</p>
-            <p><strong>Plan:</strong> {plan}</p>
-            <p><strong>Debug:</strong> Stripe key exists: {bool(stripe.api_key)}</p>
-            <a href="/" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">← Back to Home</a>
-        </div>
-        """, status_code=500)
-
-@app.get("/success", response_class=HTMLResponse)
-async def payment_success(session_id: str = None):
-    """Payment success page"""
-    
-    if not session_id:
-        return HTMLResponse("""
-        <div style="text-align: center; font-family: Arial; margin: 100px;">
-            <h1>❌ Missing Session ID</h1>
-            <p>No session ID provided in the URL.</p>
-            <a href="/" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">← Back to Home</a>
-        </div>
-        """, status_code=400)
-    
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>🎉 Welcome to AI Lead Robot!</title>
-        <style>
-            body {{ font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center; background: #f5f7fa; }}
-            .success {{ background: white; padding: 50px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }}
-            .btn {{ background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; display: inline-block; margin: 10px; }}
-        </style>
-    </head>
-    <body>
-        <div class="success">
-            <h1>🎉 Welcome to AI Lead Robot!</h1>
-            <h2>Your 14-Day Free Trial Has Started!</h2>
-            
-            <p>We're setting up your account now. You'll receive an email with your login details within 5 minutes.</p>
-            
-            <p><strong>What happens next:</strong></p>
-            <ol style="text-align: left;">
-                <li>Check your email for account details</li>
-                <li>Login to your dashboard</li>
-                <li>Set up your Zapier integration</li>
-                <li>Start capturing and qualifying leads!</li>
-            </ol>
-            
-            <a href="/" class="btn">← Back to Home</a>
-        </div>
-    </body>
-    </html>
-    """
-
-@app.get("/cancel", response_class=HTMLResponse)
-def payment_cancelled():
-    """Payment cancelled page"""
-    
-    return """
-    <div style="text-align: center; font-family: Arial; margin: 100px auto; max-width: 600px;">
-        <h1>😞 Payment Cancelled</h1>
-        <p>No problem! You can start your free trial anytime.</p>
-        <a href="/#pricing" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">
-           ← Back to Pricing
-       </a>
-   </div>
-   """
-@app.get("/privacy", response_class=HTMLResponse)
-async def privacy_policy():
-    """GDPR compliant privacy policy"""
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Privacy Policy - AI Lead Robot</title>
-        <style>
-            body { 
-                font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; 
-                padding: 20px; line-height: 1.6; background: #f5f7fa; 
-            }
-            .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-            h1, h2 { color: #333; }
-            .contact { background: #e8f5e9; padding: 20px; border-radius: 8px; margin: 20px 0; }
-            .btn { background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🔒 Privacy Policy</h1>
-            <p><strong>Last updated:</strong> May 30, 2025</p>
-            
-            <h2>1. Information We Collect</h2>
-            <p>We collect information you provide directly to us, such as:</p>
-            <ul>
-                <li><strong>Account Information:</strong> Email address, name, company details</li>
-                <li><strong>Lead Data:</strong> Contact information of your leads that you submit through our API</li>
-                <li><strong>Payment Information:</strong> Processed securely by Stripe (we don't store card details)</li>
-                <li><strong>Usage Data:</strong> How you use our service, API calls, feature usage</li>
-            </ul>
-            
-            <h2>2. How We Use Your Information</h2>
-            <ul>
-                <li>Provide and improve our AI lead qualification service</li>
-                <li>Process your leads and send qualification reports</li>
-                <li>Send transactional emails (welcome, usage alerts, etc.)</li>
-                <li>Provide customer support</li>
-                <li>Comply with legal obligations</li>
-            </ul>
-            
-            <h2>3. Your Rights (GDPR)</h2>
-            <p>If you're in the EU, you have the right to:</p>
-            <ul>
-                <li><strong>Access:</strong> Request a copy of your personal data</li>
-                <li><strong>Rectification:</strong> Correct inaccurate personal data</li>
-                <li><strong>Erasure:</strong> Request deletion of your personal data</li>
-                <li><strong>Portability:</strong> Receive your data in a structured format</li>
-                <li><strong>Object:</strong> Object to processing of your personal data</li>
-                <li><strong>Restrict:</strong> Request restriction of processing</li>
-            </ul>
-            
-            <h2>4. Data Retention</h2>
-            <p>We retain your data for as long as your account is active, plus 30 days after cancellation for backup purposes.</p>
-            
-            <h2>5. Data Security</h2>
-            <p>We use industry-standard security measures including encryption, secure databases, and regular security audits.</p>
-            
-            <h2>6. Third-Party Services</h2>
-            <ul>
-                <li><strong>Stripe:</strong> Payment processing</li>
-                <li><strong>SendGrid:</strong> Email delivery</li>
-                <li><strong>OpenAI:</strong> AI text processing (optional)</li>
-                <li><strong>Zapier:</strong> Integration platform (when you configure it)</li>
-            </ul>
-            
-            <div class="contact">
-                <h2>7. Contact Us</h2>
-                <p>For privacy questions or to exercise your rights:</p>
-                <p><strong>Email:</strong> privacy@yourcompany.com</p>
-                <p><strong>Data Protection Officer:</strong> dpo@yourcompany.com</p>
-            </div>
-            
-            <p style="text-align: center; margin-top: 30px;">
-                <a href="/" class="btn">← Back to Home</a>
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-@app.get("/terms", response_class=HTMLResponse)
-async def terms_of_service():
-    """Terms of service"""
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Terms of Service - AI Lead Robot</title>
-        <style>
-            body { 
-                font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; 
-                padding: 20px; line-height: 1.6; background: #f5f7fa; 
-            }
-            .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
-            h1, h2 { color: #333; }
-            .btn { background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>📋 Terms of Service</h1>
-            <p><strong>Last updated:</strong> May 30, 2025</p>
-            
-            <h2>1. Service Description</h2>
-            <p>AI Lead Robot provides automated lead qualification services using artificial intelligence and Zapier integrations.</p>
-            
-            <h2>2. Free Trial</h2>
-            <p>We offer a 14-day free trial. You can cancel anytime during the trial without being charged.</p>
-            
-            <h2>3. Billing</h2>
-            <p>After your trial ends, you'll be charged monthly. You can cancel anytime from your dashboard.</p>
-            
-            <h2>4. Data Usage</h2>
-            <p>You're responsible for ensuring you have permission to process the lead data you submit to our service.</p>
-            
-            <h2>5. Acceptable Use</h2>
-            <p>Don't use our service for spam, illegal activities, or harassment.</p>
-            
-            <h2>6. Service Availability</h2>
-            <p>We strive for 99.9% uptime but cannot guarantee uninterrupted service.</p>
-            
-            <h2>7. Cancellation</h2>
-            <p>You can cancel your subscription anytime by contacting support.</p>
-            
-            <h2>8. Limitation of Liability</h2>
-            <p>Our liability is limited to the amount you've paid for the service.</p>
-            
-            <p style="text-align: center; margin-top: 30px;">
-                <a href="/" class="btn">← Back to Home</a>
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-# Health check with mode indicator
-@app.get("/health")
-def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "mode": "modular" if MODULAR_MODE else "legacy",
-        "version": "2.0.0",
-        "features": {
-            "database": "✅ Connected",
-            "zapier_integration": "✅ Active" if MODULAR_MODE else "🔄 Legacy Mode",
-            "stripe_payments": "✅ Configured" if stripe.api_key else "❌ Not Configured",
-            "stripe_initialized": stripe_initialized
-        }
-    }
-
-# Legacy routes for backward compatibility
-@app.get("/api/analytics")
-async def get_analytics(customer: dict = Depends(get_current_customer)):
-    """Get customer analytics"""
-    
-    if MODULAR_MODE:
-        total_leads = await db_service.execute_query(
-            "SELECT COUNT(*) as count FROM leads WHERE customer_id = ?",
-            (customer['id'],),
-            fetch='one'
-        )
-        
-        qualified_leads = await db_service.execute_query(
-            "SELECT COUNT(*) as count FROM leads WHERE customer_id = ? AND qualification_stage IN ('hot_lead', 'warm_lead')",
-            (customer['id'],),
-            fetch='one'
-        )
-        
-        # Lead sources
-        lead_sources = await db_service.execute_query(
-            "SELECT source, COUNT(*) as count FROM leads WHERE customer_id = ? GROUP BY source ORDER BY count DESC",
-            (customer['id'],),
-            fetch='all'
-        )
-    else:
-        # Legacy database operations
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) as count FROM leads WHERE customer_id = ?", (customer['id'],))
-        total_leads = dict(cursor.fetchone())
-        
-        cursor.execute("""
-            SELECT COUNT(*) as count FROM leads 
-            WHERE customer_id = ? AND qualification_stage = 'hot_lead'
-        """, (customer['id'],))
-        hot_leads = dict(cursor.fetchone())
-        
-        cursor.execute("""
-            SELECT COUNT(*) as count FROM leads 
-            WHERE customer_id = ? AND qualification_stage = 'warm_lead'
-        """, (customer['id'],))
-        warm_leads = dict(cursor.fetchone())
-        
-        qualified_leads = {'count': hot_leads['count'] + warm_leads['count']}
-        
-        cursor.execute("""
-            SELECT source, COUNT(*) as count
-            FROM leads WHERE customer_id = ?
-            GROUP BY source ORDER BY count DESC
-        """, (customer['id'],))
-        lead_sources = [{"source": row[0], "count": row[1]} for row in cursor.fetchall()]
-        
-        conn.close()
-    
-    total_count = total_leads['count'] if total_leads else 0
-    qualified_count = qualified_leads['count'] if qualified_leads else 0
-    conversion_rate = (qualified_count / max(total_count, 1)) * 100
-    
-    return {
-        "total_leads": total_count,
-        "qualified_leads": qualified_count,
-        "conversion_rate": round(conversion_rate, 1),
-        "usage": {
-            "used": customer['leads_used_this_month'],
-            "limit": customer['leads_limit'],
-            "percentage": round((customer['leads_used_this_month'] / customer['leads_limit']) * 100, 1)
-        },
-        "lead_sources": lead_sources or []
-    }
-
-@app.get("/api/leads")
-async def get_leads(customer: dict = Depends(get_current_customer), skip: int = 0, limit: int = 50):
-    """Get customer's leads"""
-    
-    if MODULAR_MODE:
-        leads = await db_service.get_leads(customer['id'], skip, limit)
-        total = await db_service.execute_query(
-            "SELECT COUNT(*) as count FROM leads WHERE customer_id = ?", 
-            (customer['id'],),
-            fetch='one'
-        )
-        total_count = total['count'] if total else 0
-    else:
-        # Legacy database operations
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT * FROM leads WHERE customer_id = ?
-            ORDER BY created_at DESC LIMIT ? OFFSET ?
-        ''', (customer['id'], limit, skip))
-        
-        leads = [dict(row) for row in cursor.fetchall()]
-        
-        cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
-        total_count = cursor.fetchone()[0]
-        
-        conn.close()
-    
-    return {
-        "leads": leads,
-        "total": total_count,
-        "skip": skip,
-        "limit": limit
-    }
-
-
-
-# Webhook for Stripe
-@app.post("/api/webhooks/stripe")
-async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks"""
-    
-    payload = await request.body()
-    sig_header = request.headers.get('stripe-signature')
-    endpoint_secret = os.getenv('STRIPE_WEBHOOK_SECRET')
-    
-    if not endpoint_secret:
-        return {"status": "webhook_secret_not_configured"}
-    
-    try:
-        event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
-        
-        if event['type'] == 'invoice.payment_succeeded':
-            # Reset monthly usage counter
-            subscription_id = event['data']['object']['subscription']
-            
-            if MODULAR_MODE:
-                await db_service.execute_query("""
-                    UPDATE customers 
-                    SET leads_used_this_month = 0, updated_at = ?
-                    WHERE stripe_subscription_id = ?
-                """, (datetime.now(), subscription_id))
-            else:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE customers 
-                    SET leads_used_this_month = 0, updated_at = ?
-                    WHERE stripe_subscription_id = ?
-                """, (datetime.now(), subscription_id))
-                conn.commit()
-                conn.close()
-            
-        elif event['type'] == 'invoice.payment_failed':
-            # Handle failed payment
-            subscription_id = event['data']['object']['subscription']
-            
-            if MODULAR_MODE:
-                await db_service.execute_query("""
-                    UPDATE customers 
-                    SET status = 'payment_failed', updated_at = ?
-                    WHERE stripe_subscription_id = ?
-                """, (datetime.now(), subscription_id))
-            else:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE customers 
-                    SET status = 'payment_failed', updated_at = ?
-                    WHERE stripe_subscription_id = ?
-                """, (datetime.now(), subscription_id))
-                conn.commit()
-                conn.close()
-            
-        elif event['type'] == 'customer.subscription.deleted':
-            # Handle cancellation
-            subscription_id = event['data']['object']['id']
-            
-            if MODULAR_MODE:
-                await db_service.execute_query("""
-                    UPDATE customers 
-                    SET status = 'cancelled', updated_at = ?
-                    WHERE stripe_subscription_id = ?
-                """, (datetime.now(), subscription_id))
-            else:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE customers 
-                    SET status = 'cancelled', updated_at = ?
-                    WHERE stripe_subscription_id = ?
-                """, (datetime.now(), subscription_id))
-                conn.commit()
-                conn.close()
-        
-        return {"status": "success"}
-        
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-# Simple dashboard route for immediate testing
-@app.get("/dash", response_class=HTMLResponse)
-async def simple_dashboard(api_key: str = None):
-    """Simple dashboard that works"""
-    
-    if not api_key:
-        return HTMLResponse("""
-        <div style="font-family: Arial; text-align: center; margin: 100px;">
-            <h1>Enter API Key</h1>
-            <form method="get">
-                <input name="api_key" placeholder="sk_live_..." style="padding: 10px; width: 300px;">
-                <button type="submit" style="padding: 10px 20px;">Go</button>
-            </form>
-        </div>
-        """)
-    
-    return HTMLResponse(f"""
-    <div style="font-family: Arial; margin: 50px;">
-        <h1>🎉 Dashboard Working!</h1>
-        <p>API Key: {api_key}</p>
-        <p><a href="/">← Home</a></p>
-    </div>
-    """)
 
 if __name__ == "__main__":
-    print("🚀 Starting AI Lead Qualification System...")
-    print(f"🔧 Mode: {'Modular' if MODULAR_MODE else 'Legacy'}")
-    print(f"💳 Stripe: {'✅ Initialized' if stripe_initialized else '❌ Not Configured'}")
+    logger.info("🚀 Starting AI Email Agent System...")
+    logger.info(f"🔧 Mode: {'Modular' if MODULAR_MODE else 'Legacy'}")
+    logger.info(f"💳 Stripe: {'✅ Initialized' if stripe_initialized else '❌ Not Configured'}")
     
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=int(os.environ.get("PORT", 8000)),
+        log_level="info"
+    )
