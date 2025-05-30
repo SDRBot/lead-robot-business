@@ -56,7 +56,7 @@ class DatabaseService:
         if self._initialized:
             return
             
-        # Create tables (keeping your existing schema)
+        # Create customers table
         await self.execute_query('''
             CREATE TABLE IF NOT EXISTS customers (
                 id TEXT PRIMARY KEY,
@@ -73,17 +73,8 @@ class DatabaseService:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        await self.execute_query('''
-    ALTER TABLE leads ADD COLUMN webhook_sent BOOLEAN DEFAULT FALSE
-        id TEXT PRIMARY KEY,
-        customer_id TEXT NOT NULL,
-        webhook_url TEXT NOT NULL,
-        events TEXT NOT NULL,
-        active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (customer_id) REFERENCES customers (id)
-    )
-''')        
+        
+        # Create leads table
         await self.execute_query('''
             CREATE TABLE IF NOT EXISTS leads (
                 id TEXT PRIMARY KEY,
@@ -104,13 +95,122 @@ class DatabaseService:
             )
         ''')
         
+        # Create analytics table (from your original app.py)
+        await self.execute_query('''
+            CREATE TABLE IF NOT EXISTS analytics (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT,
+                event_type TEXT NOT NULL,
+                data TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+        ''')
+        
+        # Create zapier webhooks table
+        await self.execute_query('''
+            CREATE TABLE IF NOT EXISTS zapier_webhooks (
+                id TEXT PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                webhook_url TEXT NOT NULL,
+                events TEXT NOT NULL,
+                active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+        ''')
+        
         # Add indexes for performance
         await self.execute_query('CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads(customer_id)')
         await self.execute_query('CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)')
         await self.execute_query('CREATE INDEX IF NOT EXISTS idx_customers_api_key ON customers(api_key)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_zapier_webhooks_customer_id ON zapier_webhooks(customer_id)')
         
         self._initialized = True
         print("✅ Database initialized with performance indexes")
+    
+    async def create_customer(self, customer_data: Dict[str, Any]) -> str:
+        """Create a new customer"""
+        customer_id = str(uuid.uuid4())
+        await self.execute_query('''
+            INSERT INTO customers (
+                id, email, stripe_customer_id, stripe_subscription_id, 
+                plan, api_key, leads_limit, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            customer_id, customer_data['email'], customer_data.get('stripe_customer_id'),
+            customer_data.get('stripe_subscription_id'), customer_data['plan'],
+            customer_data['api_key'], customer_data['leads_limit'], 'active',
+            datetime.now(), datetime.now()
+        ))
+        return customer_id
+    
+    async def get_customer_by_api_key(self, api_key: str) -> Optional[Dict[str, Any]]:
+        """Get customer by API key"""
+        return await self.execute_query(
+            "SELECT * FROM customers WHERE api_key = ? AND status = 'active'",
+            (api_key,),
+            fetch='one'
+        )
+    
+    async def get_customer_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Get customer by email"""
+        return await self.execute_query(
+            "SELECT * FROM customers WHERE email = ? AND status = 'active'",
+            (email,),
+            fetch='one'
+        )
+    
+    async def create_lead(self, lead_data: Dict[str, Any]) -> str:
+        """Create a new lead"""
+        lead_id = str(uuid.uuid4())
+        await self.execute_query('''
+            INSERT INTO leads (
+                id, customer_id, email, first_name, last_name, 
+                company, phone, source, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            lead_id, lead_data['customer_id'], lead_data['email'],
+            lead_data.get('first_name'), lead_data.get('last_name'),
+            lead_data.get('company'), lead_data.get('phone'),
+            lead_data.get('source', 'api'), datetime.now(), datetime.now()
+        ))
+        return lead_id
+    
+    async def get_leads(self, customer_id: str, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get leads for a customer"""
+        return await self.execute_query('''
+            SELECT * FROM leads WHERE customer_id = ?
+            ORDER BY created_at DESC LIMIT ? OFFSET ?
+        ''', (customer_id, limit, skip), fetch='all')
+    
+    async def update_customer_usage(self, customer_id: str):
+        """Increment customer's lead usage counter"""
+        await self.execute_query('''
+            UPDATE customers 
+            SET leads_used_this_month = leads_used_this_month + 1, updated_at = ?
+            WHERE id = ?
+        ''', (datetime.now(), customer_id))
+    
+    async def set_customer_password(self, api_key: str, password_hash: str):
+        """Set customer password hash"""
+        await self.execute_query('''
+            UPDATE customers 
+            SET password_hash = ?, updated_at = ?
+            WHERE api_key = ?
+        ''', (password_hash, datetime.now(), api_key))
+    
+    async def log_analytics_event(self, customer_id: str, event_type: str, data: Dict[str, Any]):
+        """Log an analytics event"""
+        await self.execute_query('''
+            INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            str(uuid.uuid4()), customer_id, event_type, 
+            json.dumps(data), datetime.now()
+        ))
 
 # Global instance
 db_service = DatabaseService()
