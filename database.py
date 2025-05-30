@@ -35,115 +35,6 @@ class DatabaseService:
                     conn.commit()
                     return cursor.rowcount
     
-    # database.py - Add corporate tables
-def init_corporate_tables(self):
-    """Initialize corporate account tables"""
-    
-    corporate_tables = [
-        '''CREATE TABLE IF NOT EXISTS corporate_accounts (
-            id TEXT PRIMARY KEY,
-            company_name TEXT NOT NULL,
-            account_type TEXT NOT NULL,
-            max_users INTEGER NOT NULL,
-            billing_contact_email TEXT NOT NULL,
-            stripe_customer_id TEXT,
-            stripe_subscription_id TEXT,
-            
-            -- Features
-            custom_branding BOOLEAN DEFAULT TRUE,
-            advanced_analytics BOOLEAN DEFAULT TRUE,
-            api_access BOOLEAN DEFAULT TRUE,
-            white_labeling BOOLEAN DEFAULT FALSE,
-            sso_enabled BOOLEAN DEFAULT FALSE,
-            
-            -- Branding
-            company_logo_url TEXT,
-            primary_color TEXT DEFAULT '#667eea',
-            secondary_color TEXT DEFAULT '#764ba2',
-            
-            -- Status
-            status TEXT DEFAULT 'active',
-            trial_ends_at TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''',
-        
-        '''CREATE TABLE IF NOT EXISTS corporate_territories (
-            id TEXT PRIMARY KEY,
-            corporate_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            regions TEXT, -- JSON array
-            industries TEXT, -- JSON array  
-            company_size_range TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (corporate_id) REFERENCES corporate_accounts (id)
-        )''',
-        
-        '''CREATE TABLE IF NOT EXISTS corporate_members (
-            id TEXT PRIMARY KEY,
-            corporate_id TEXT NOT NULL,
-            customer_id TEXT, -- Links to main customers table
-            email TEXT NOT NULL,
-            first_name TEXT NOT NULL,
-            last_name TEXT NOT NULL,
-            role TEXT NOT NULL,
-            department TEXT,
-            
-            -- AI Agent
-            ai_agent_name TEXT NOT NULL,
-            ai_agent_personality TEXT, -- JSON
-            
-            -- Access
-            territories TEXT, -- JSON array of territory IDs
-            email_quota_monthly INTEGER DEFAULT 1000,
-            email_sent_this_month INTEGER DEFAULT 0,
-            active BOOLEAN DEFAULT TRUE,
-            
-            -- Onboarding
-            onboarded BOOLEAN DEFAULT FALSE,
-            invite_token TEXT,
-            invited_at TIMESTAMP,
-            joined_at TIMESTAMP,
-            
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            
-            FOREIGN KEY (corporate_id) REFERENCES corporate_accounts (id),
-            FOREIGN KEY (customer_id) REFERENCES customers (id)
-        )''',
-        
-        '''CREATE TABLE IF NOT EXISTS corporate_analytics (
-            id TEXT PRIMARY KEY,
-            corporate_id TEXT NOT NULL,
-            member_id TEXT,
-            territory_id TEXT,
-            metric_type TEXT NOT NULL, -- 'conversation', 'lead', 'conversion', etc.
-            metric_value REAL NOT NULL,
-            metric_data TEXT, -- JSON for additional data
-            date_recorded DATE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            
-            FOREIGN KEY (corporate_id) REFERENCES corporate_accounts (id),
-            FOREIGN KEY (member_id) REFERENCES corporate_members (id)
-        )''',
-        
-        '''CREATE TABLE IF NOT EXISTS team_notifications (
-            id TEXT PRIMARY KEY,
-            corporate_id TEXT NOT NULL,
-            title TEXT NOT NULL,
-            message TEXT NOT NULL,
-            notification_type TEXT NOT NULL, -- 'success', 'warning', 'info', 'error'
-            target_roles TEXT, -- JSON array of roles to notify
-            read_by TEXT DEFAULT '[]', -- JSON array of member IDs who read it
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            
-            FOREIGN KEY (corporate_id) REFERENCES corporate_accounts (id)
-        )'''
-    ]
-    
-    for table_sql in corporate_tables:
-        self.execute_query(table_sql)
-    
     def init_database(self):
         """Initialize database synchronously"""
         if self._initialized:
@@ -230,19 +121,6 @@ def init_corporate_tables(self):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         ]
-
-        try:
-        # Execute all table creation
-        for i, table_sql in enumerate(tables):
-            self.execute_query(table_sql)
-            print(f"✅ Created table {i+1}/{len(tables)}")
-        
-        self._initialized = True
-        print("✅ Database initialized successfully")
-        
-    except Exception as e:
-        print(f"❌ Database initialization error: {e}")
-        raise
         
         # Create indexes
         indexes = [
