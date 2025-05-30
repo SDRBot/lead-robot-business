@@ -116,7 +116,7 @@ async def lifespan(app):
     """Application lifespan management"""
     # Startup
     if MODULAR_MODE:
-        await db_service.init_database()
+        db_service.init_database()  # Remove await - now sync
         print("✅ Modular database initialized")
     else:
         init_database()
