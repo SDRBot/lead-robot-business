@@ -30,8 +30,24 @@ class WebhookEvent(str, Enum):
     LEAD_CREATED = "lead_created"
     LEAD_QUALIFIED = "lead_qualified"
     LEAD_UPDATED = "lead_updated"
+class AdminLogin(BaseModel):
+    username: str
+    password: str
 
-# Add these for API requests
+class PromoCodeCreate(BaseModel):
+    code: str
+    trial_days: int = 30
+    plan_override: Optional[str] = None
+    max_uses: Optional[int] = None
+    expires_at: Optional[datetime] = None
+    description: Optional[str] = None
+
+class CustomerUpdate(BaseModel):
+    status: Optional[str] = None
+    plan: Optional[str] = None
+    leads_limit: Optional[int] = None
+    notes: Optional[str] = None
+    
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
