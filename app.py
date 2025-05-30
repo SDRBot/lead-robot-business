@@ -1495,7 +1495,29 @@ async def stripe_webhook(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
+# Simple dashboard route for immediate testing
+@app.get("/dash", response_class=HTMLResponse)
+async def simple_dashboard(api_key: str = None):
+    """Simple dashboard that works"""
+    
+    if not api_key:
+        return HTMLResponse("""
+        <div style="font-family: Arial; text-align: center; margin: 100px;">
+            <h1>Enter API Key</h1>
+            <form method="get">
+                <input name="api_key" placeholder="sk_live_..." style="padding: 10px; width: 300px;">
+                <button type="submit" style="padding: 10px 20px;">Go</button>
+            </form>
+        </div>
+        """)
+    
+    return HTMLResponse(f"""
+    <div style="font-family: Arial; margin: 50px;">
+        <h1>🎉 Dashboard Working!</h1>
+        <p>API Key: {api_key}</p>
+        <p><a href="/">← Home</a></p>
+    </div>
+    """)
 
 if __name__ == "__main__":
     print("🚀 Starting AI Lead Qualification System...")
