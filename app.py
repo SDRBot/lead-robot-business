@@ -679,6 +679,210 @@ async def home():
 </html>
 """
 
+# Simple Dashboard Route - Add this to app.py
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(api_key: str = None):
+    """Simple working dashboard"""
+    
+    if not api_key:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>🔐 API Key Required</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+        <body style="font-family: Arial; text-align: center; padding: 50px; background: #f5f7fa;">
+            <div style="background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto;">
+                <h1>🔐 Dashboard Access</h1>
+                <p>Enter your API key to access your dashboard:</p>
+                <form method="get" style="margin: 20px 0;">
+                    <input type="text" name="api_key" placeholder="sk_live_..." style="padding: 12px; width: 300px; border: 1px solid #ddd; border-radius: 5px; margin: 10px;">
+                    <br>
+                    <button type="submit" style="background: #667eea; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer;">Access Dashboard</button>
+                </form>
+                <p><a href="/" style="color: #667eea;">← Back to Home</a></p>
+            </div>
+        </body>
+        </html>
+        """)
+    
+    # Simple API key check
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM customers WHERE api_key = ? AND status = 'active'", (api_key,))
+    customer = cursor.fetchone()
+    
+    if not customer:
+        conn.close()
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>❌ Invalid API Key</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+        </head>
+        <body style="font-family: Arial; text-align: center; padding: 50px; background: #f5f7fa;">
+            <div style="background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 500px; margin: 0 auto;">
+                <h1 style="color: #dc3545;">❌ Invalid API Key</h1>
+                <p>The API key you provided is invalid or expired.</p>
+                <a href="/dashboard" style="color: #667eea;">← Try Again</a>
+            </div>
+        </body>
+        </html>
+        """, status_code=401)
+    
+    customer = dict(customer)
+    
+    # Get basic stats
+    cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ?", (customer['id'],))
+    total_leads = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM leads WHERE customer_id = ? AND qualification_stage IN ('hot_lead', 'warm_lead')", (customer['id'],))
+    qualified_leads = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    plan_info = PRICING_PLANS.get(customer['plan'], PRICING_PLANS['starter'])
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>📊 Dashboard - AI Lead Robot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {{ font-family: Arial; margin: 0; background: #f5f7fa; }}
+            .container {{ max-width: 1200px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 30px; border-radius: 15px; margin-bottom: 30px; }}
+            .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }}
+            .metric {{ background: white; padding: 25px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }}
+            .metric h3 {{ margin: 0 0 10px 0; color: #666; font-size: 14px; }}
+            .value {{ font-size: 32px; font-weight: bold; color: #667eea; }}
+            .btn {{ background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 5px; }}
+            .card {{ background: white; padding: 30px; border-radius: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin: 20px 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📊 AI Lead Robot Dashboard</h1>
+                <p>Welcome back! Here's your lead qualification overview.</p>
+                <p><strong>Plan:</strong> {plan_info['name']} | <strong>Email:</strong> {customer['email']}</p>
+            </div>
+            
+            <div class="metrics">
+                <div class="metric">
+                    <h3>Total Leads</h3>
+                    <div class="value">{total_leads}</div>
+                </div>
+                <div class="metric">
+                    <h3>Qualified Leads</h3>
+                    <div class="value">{qualified_leads}</div>
+                </div>
+                <div class="metric">
+                    <h3>Conversion Rate</h3>
+                    <div class="value">{round((qualified_leads/max(total_leads,1))*100, 1)}%</div>
+                </div>
+                <div class="metric">
+                    <h3>Monthly Usage</h3>
+                    <div class="value">{customer['leads_used_this_month']}/{customer['leads_limit']}</div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>🔑 Your API Key</h3>
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; word-break: break-all; margin: 10px 0;">
+                    {api_key}
+                </div>
+                
+                <h4>Quick Test:</h4>
+                <button onclick="testAPI()" class="btn">🧪 Test API</button>
+                <a href="/support?api_key={api_key}" class="btn">💬 Get Support</a>
+            </div>
+            
+            <div class="card">
+                <h3>📚 Quick Links</h3>
+                <a href="/" class="btn">🏠 Home</a>
+                <a href="/checkout/professional" class="btn">⬆️ Upgrade Plan</a>
+                <a href="mailto:support@yourcompany.com" class="btn">📧 Contact Support</a>
+            </div>
+        </div>
+        
+        <script>
+            function testAPI() {{
+                const testData = {{
+                    email: "test@example.com",
+                    first_name: "Test",
+                    company: "Test Company",
+                    source: "dashboard_test"
+                }};
+                
+                fetch('/api/leads', {{
+                    method: 'POST',
+                    headers: {{
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer {api_key}'
+                    }},
+                    body: JSON.stringify(testData)
+                }})
+                .then(response => response.json())
+                .then(data => {{
+                    if (data.lead_id) {{
+                        alert('✅ API Test Successful! Lead ID: ' + data.lead_id);
+                        setTimeout(() => location.reload(), 1000);
+                    }} else {{
+                        alert('❌ API Test Failed: ' + JSON.stringify(data));
+                    }}
+                }})
+                .catch(error => {{
+                    alert('❌ Error: ' + error);
+                }});
+            }}
+        </script>
+    </body>
+    </html>
+    """
+
+# Simple support page too
+@app.get("/support", response_class=HTMLResponse) 
+async def support(api_key: str = None):
+    """Simple support page"""
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>💬 Support - AI Lead Robot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body style="font-family: Arial; background: #f5f7fa; padding: 20px;">
+        <div style="max-width: 800px; margin: 0 auto; background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">
+            <h1>💬 Need Help?</h1>
+            <p>We're here to help you get the most out of AI Lead Robot!</p>
+            
+            <div style="background: #e3f2fd; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3>📧 Contact Support</h3>
+                <p><strong>Email:</strong> support@yourcompany.com</p>
+                <p><strong>Response Time:</strong> Within 24 hours</p>
+            </div>
+            
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                <h3>📚 Quick Help</h3>
+                <ul>
+                    <li><strong>API Documentation:</strong> Available in your dashboard</li>
+                    <li><strong>Test API:</strong> Use the test button in your dashboard</li>
+                    <li><strong>Billing Questions:</strong> Email us with your account details</li>
+                </ul>
+            </div>
+            
+            <p style="text-align: center; margin-top: 30px;">
+                <a href="/dashboard?api_key={api_key or 'YOUR_API_KEY'}" style="background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px;">← Back to Dashboard</a>
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
 @app.get("/debug/env")
 async def debug_env():
     """Debug environment variables"""
@@ -1194,6 +1398,8 @@ async def get_leads(customer: dict = Depends(get_current_customer), skip: int = 
         "limit": limit
     }
 
+
+
 # Webhook for Stripe
 @app.post("/api/webhooks/stripe")
 async def stripe_webhook(request: Request):
@@ -1276,6 +1482,8 @@ async def stripe_webhook(request: Request):
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
 
 if __name__ == "__main__":
     print("🚀 Starting AI Lead Qualification System...")
