@@ -539,6 +539,136 @@ async def home():
 </html>
 """
 
+@app.get("/checkout/{plan}")
+async def checkout(plan: str, request: Request):
+    """Create Stripe checkout session"""
+    
+    print(f"🛒 Checkout requested for plan: {plan}")
+    
+    if plan not in PRICING_PLANS:
+        raise HTTPException(status_code=404, detail=f"Plan '{plan}' not found")
+    
+    # Get base URL from request
+    base_url = str(request.base_url).rstrip('/')
+    success_url = f"{base_url}/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{base_url}/#pricing"
+    
+    print(f"📍 Success URL: {success_url}")
+    print(f"📍 Cancel URL: {cancel_url}")
+    
+    try:
+        # Use your existing Stripe integration
+        checkout_url = create_checkout_session(plan, success_url, cancel_url)
+        print(f"✅ Redirecting to: {checkout_url}")
+        return RedirectResponse(url=checkout_url, status_code=303)
+    except Exception as e:
+        print(f"❌ Checkout error: {str(e)}")
+        return HTMLResponse(f"""
+        <div style="text-align: center; font-family: Arial; margin: 100px;">
+            <h1>❌ Checkout Error</h1>
+            <p>Sorry, there was an issue processing your request.</p>
+            <p><strong>Error:</strong> {str(e)}</p>
+            <p><strong>Plan:</strong> {plan}</p>
+            <p><a href="/" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">← Back to Home</a></p>
+        </div>
+        """, status_code=500)
+
+def create_checkout_session(plan: str, success_url: str, cancel_url: str):
+    """Create Stripe checkout session with 14-day trial"""
+    
+    if plan not in PRICING_PLANS:
+        raise ValueError(f"Plan '{plan}' not found")
+    
+    plan_info = PRICING_PLANS[plan]
+    
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'usd',
+                    'product_data': {
+                        'name': f"AI Lead Robot - {plan_info['name']}",
+                        'description': f"{plan_info['description']} - {plan_info['leads_limit']} leads/month",
+                    },
+                    'unit_amount': plan_info['price'] * 100,
+                    'recurring': {'interval': 'month'}
+                },
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={'plan': plan},
+            subscription_data={
+                'trial_period_days': 14,
+            },
+        )
+        
+        return checkout_session.url
+        
+    except Exception as e:
+        raise Exception(f"Error creating checkout: {str(e)}")
+
+@app.get("/success", response_class=HTMLResponse)
+async def payment_success(session_id: str = None):
+    """Payment success page"""
+    
+    if not session_id:
+        return HTMLResponse("""
+        <div style="text-align: center; font-family: Arial; margin: 100px;">
+            <h1>❌ Missing Session ID</h1>
+            <p>No session ID provided in the URL.</p>
+            <a href="/" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">← Back to Home</a>
+        </div>
+        """, status_code=400)
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>🎉 Welcome to AI Lead Robot!</title>
+        <style>
+            body {{ font-family: Arial; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center; background: #f5f7fa; }}
+            .success {{ background: white; padding: 50px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }}
+            .btn {{ background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; display: inline-block; margin: 10px; }}
+        </style>
+    </head>
+    <body>
+        <div class="success">
+            <h1>🎉 Welcome to AI Lead Robot!</h1>
+            <h2>Your 14-Day Free Trial Has Started!</h2>
+            
+            <p>We're setting up your account now. You'll receive an email with your login details within 5 minutes.</p>
+            
+            <p><strong>What happens next:</strong></p>
+            <ol style="text-align: left;">
+                <li>Check your email for account details</li>
+                <li>Login to your dashboard</li>
+                <li>Set up your Zapier integration</li>
+                <li>Start capturing and qualifying leads!</li>
+            </ol>
+            
+            <a href="/" class="btn">← Back to Home</a>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.get("/cancel", response_class=HTMLResponse)
+def payment_cancelled():
+    """Payment cancelled page"""
+    
+    return """
+    <div style="text-align: center; font-family: Arial; margin: 100px auto; max-width: 600px;">
+        <h1>😞 Payment Cancelled</h1>
+        <p>No problem! You can start your free trial anytime.</p>
+        <a href="/#pricing" style="background: #667eea; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px;">
+           ← Back to Pricing
+       </a>
+   </div>
+   """
+
 # Keep all your existing routes (checkout, success, etc.)
 # ... [Include all your existing routes from the original app.py]
 
