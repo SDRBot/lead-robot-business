@@ -843,6 +843,18 @@ async def dashboard(api_key: str = None):
     </body>
     </html>
     """
+@app.get("/debug/routes")
+async def debug_routes():
+    """Debug: List all registered routes"""
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'path') and hasattr(route, 'methods'):
+            routes.append({
+                "path": route.path,
+                "methods": list(route.methods) if route.methods else [],
+                "name": getattr(route, 'name', 'N/A')
+            })
+    return {"routes": routes, "total_routes": len(routes)}
 
 # Simple support page too
 @app.get("/support", response_class=HTMLResponse) 
