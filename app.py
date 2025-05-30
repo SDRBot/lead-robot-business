@@ -73,7 +73,7 @@ app = FastAPI(
     docs_url=None,  # Disable /docs
     redoc_url=None,  # Disable /redoc
     openapi_url=None  # Disable /openapi.json
-
+)
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
