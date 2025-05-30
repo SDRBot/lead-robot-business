@@ -230,6 +230,19 @@ def init_corporate_tables(self):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )'''
         ]
+
+        try:
+        # Execute all table creation
+        for i, table_sql in enumerate(tables):
+            self.execute_query(table_sql)
+            print(f"✅ Created table {i+1}/{len(tables)}")
+        
+        self._initialized = True
+        print("✅ Database initialized successfully")
+        
+    except Exception as e:
+        print(f"❌ Database initialization error: {e}")
+        raise
         
         # Create indexes
         indexes = [
