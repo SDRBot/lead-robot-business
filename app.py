@@ -319,10 +319,11 @@ async def send_welcome_email_async(email: str, first_name: str):
 # Include modular routers if available
 if MODULAR_MODE:
     try:
-        from routers import auth, dashboard, webhooks
+        from routers import auth, dashboard, webhooks, support
         app.include_router(auth.router)
         app.include_router(dashboard.router)  
         app.include_router(webhooks.router)
+        app.include_router(support.router)
         print("✅ Modular routers loaded")
     except ImportError as e:
         print(f"⚠️ Some modular routers failed to load: {e}")
