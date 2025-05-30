@@ -1,6 +1,6 @@
 # models.py - Fix the imports at the top
 from pydantic import BaseModel, EmailStr, HttpUrl, validator
-from typing import Optional, List
+from typing import Optional, List, Dict, Any 
 from datetime import datetime
 from enum import Enum
 
