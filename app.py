@@ -355,7 +355,7 @@ if MODULAR_MODE:
 # Keep all your existing routes (homepage, checkout, etc.)
 @app.get("/", response_class=HTMLResponse)
 async def home():
-    """Updated homepage with Zapier messaging"""
+    """Updated homepage with Zapier messaging and pricing"""
     return """
 <!DOCTYPE html>
 <html>
@@ -366,20 +366,59 @@ async def home():
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             margin: 0; padding: 0; background: #f5f7fa; 
         }
+        .zapier-banner {
+            background: #ff6b35; color: white; padding: 10px; text-align: center;
+            font-weight: bold; font-size: 14px;
+        }
         .hero { 
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white; padding: 80px 20px; text-align: center;
         }
         .hero h1 { font-size: 3em; margin: 0; }
         .hero p { font-size: 1.2em; margin: 20px 0; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+        .features { 
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px; padding: 80px 20px; 
+        }
+        .feature { 
+            background: white; padding: 40px; border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center;
+        }
+        .feature h3 { color: #333; margin-top: 0; }
+        .plans { 
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 40px; padding: 60px 20px; max-width: 1200px; margin: 0 auto;
+        }
+        .plan { 
+            background: white; padding: 40px; border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1); position: relative;
+        }
+        .popular { border: 3px solid #667eea; transform: scale(1.05); }
+        .popular::before {
+            content: "🔥 MOST POPULAR";
+            position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
+            background: #667eea; color: white; padding: 8px 20px; border-radius: 20px;
+            font-size: 12px; font-weight: bold;
+        }
+        .price { font-size: 3em; font-weight: bold; color: #667eea; margin: 20px 0; }
         .btn {
             background: #667eea; color: white; padding: 15px 30px; border: none;
             border-radius: 8px; font-size: 18px; font-weight: bold; cursor: pointer;
-            text-decoration: none; display: inline-block; margin: 10px;
+            text-decoration: none; display: inline-block; width: 100%; text-align: center;
+            transition: all 0.3s; margin: 10px 0;
         }
-        .zapier-banner {
-            background: #ff6b35; color: white; padding: 10px; text-align: center;
-            font-weight: bold; font-size: 14px;
+        .btn:hover { background: #5a6fd8; transform: translateY(-2px); }
+        .btn-secondary { background: #2c3e50; }
+        .features-list { text-align: left; margin: 30px 0; }
+        .features-list li { margin: 10px 0; padding-left: 25px; position: relative; }
+        .features-list li::before { content: "✅"; position: absolute; left: 0; }
+        .zapier-features {
+            background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; margin-top: 40px;
+        }
+        .zapier-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            gap: 15px; text-align: left; margin-top: 15px;
         }
     </style>
 </head>
@@ -387,19 +426,20 @@ async def home():
     <div class="zapier-banner">
         🆕 NEW: Zapier Integration! Connect to 6,000+ apps including Salesforce, HubSpot, Slack & more!
     </div>
+    
     <div class="hero">
-        <div style="max-width: 1200px; margin: 0 auto;">
+        <div class="container">
             <h1>🤖 AI Lead Robot</h1>
             <p>Stop wasting time on unqualified leads. Our AI automatically qualifies your leads and sends them to your favorite tools via Zapier.</p>
             
             <div style="margin: 30px 0;">
                 <a href="#pricing" class="btn">Start 14-Day Free Trial</a>
-                <a href="/auth/login" class="btn" style="background: #2c3e50;">🔓 Customer Login</a>
+                <a href="/auth/login" class="btn btn-secondary">🔓 Customer Login</a>
             </div>
             
-            <div style="margin-top: 40px; background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px;">
+            <div class="zapier-features">
                 <h3 style="margin-top: 0;">⚡ Zapier Integration Features:</h3>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; text-align: left;">
+                <div class="zapier-grid">
                     <div>✅ Send leads to any CRM</div>
                     <div>✅ Slack notifications</div>
                     <div>✅ Email automation</div>
@@ -407,6 +447,91 @@ async def home():
                     <div>✅ Custom workflows</div>
                     <div>✅ Real-time webhooks</div>
                 </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="features">
+            <div class="feature">
+                <h3>🧠 AI-Powered Qualification</h3>
+                <p>Our AI analyzes every lead response to determine buying intent, budget, authority, and timeline automatically.</p>
+            </div>
+            <div class="feature">
+                <h3>📧 Automated Follow-Up</h3>
+                <p>Personalized email sequences that adapt based on lead responses. Never miss a follow-up again.</p>
+            </div>
+            <div class="feature">
+                <h3>🎯 Hot Lead Alerts</h3>
+                <p>Get instant notifications when a lead is ready to buy. Focus your time on qualified prospects only.</p>
+            </div>
+            <div class="feature">
+                <h3>📊 Smart Analytics</h3>
+                <p>Track conversion rates, lead sources, and qualification metrics with detailed reporting dashboards.</p>
+            </div>
+            <div class="feature">
+                <h3>🔗 Zapier Integration</h3>
+                <p>Connect to 6,000+ apps including Salesforce, HubSpot, Slack, Google Sheets, and more with one-click setup.</p>
+            </div>
+            <div class="feature">
+                <h3>⚡ 5-Minute Setup</h3>
+                <p>Add one line of code to your website and start qualifying leads immediately. No complex setup required.</p>
+            </div>
+        </div>
+        
+        <div id="pricing" style="text-align: center; padding: 40px 0;">
+            <h2 style="font-size: 2.5em; margin-bottom: 20px;">Simple, Transparent Pricing</h2>
+            <p style="font-size: 1.2em; color: #666;">Start with a 14-day free trial. No credit card required during trial.</p>
+        </div>
+        
+        <div class="plans">
+            <div class="plan">
+                <h3>Starter Plan</h3>
+                <div class="price">$99<span style="font-size: 0.4em;">/mo</span></div>
+                <ul class="features-list">
+                    <li>500 leads per month</li>
+                    <li>AI-powered qualification</li>
+                    <li>Email automation</li>
+                    <li>Basic analytics</li>
+                    <li>Zapier integration</li>
+                    <li>Email support</li>
+                </ul>
+                <a href="/checkout/starter" class="btn">Start 14-Day Free Trial</a>
+            </div>
+            
+            <div class="plan popular">
+                <h3>Professional Plan</h3>
+                <div class="price">$299<span style="font-size: 0.4em;">/mo</span></div>
+                <ul class="features-list">
+                    <li>2,000 leads per month</li>
+                    <li>Everything in Starter</li>
+                    <li>Advanced Zapier workflows</li>
+                    <li>Advanced analytics</li>
+                    <li>Priority support</li>
+                    <li>API access</li>
+                    <li>Custom integrations</li>
+                    <li>Phone support</li>
+                </ul>
+                <a href="/checkout/professional" class="btn">Start 14-Day Free Trial</a>
+            </div>
+        </div>
+    </div>
+    
+    <div style="background: #2c3e50; color: white; padding: 60px 0; margin-top: 80px; text-align: center;">
+        <div class="container">
+            <h2>Ready to 10x Your Lead Conversion?</h2>
+            <p>Join hundreds of businesses already using AI Lead Robot with Zapier integration</p>
+            <a href="/checkout/professional" class="btn" style="background: #e74c3c; width: auto; display: inline-block;">Start Free Trial Today</a>
+            
+            <div style="margin-top: 40px; border-top: 1px solid #34495e; padding-top: 30px;">
+                <p style="margin: 10px 0;">
+                    <a href="/privacy" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Privacy Policy</a>
+                    <a href="/terms" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Terms of Service</a>
+                    <a href="/support" style="color: #bdc3c7; margin: 0 15px; text-decoration: none;">Support</a>
+                </p>
+                <p style="font-size: 12px; color: #95a5a6;">
+                    🤖 AI Lead Robot - Intelligent Lead Qualification with Zapier Integration
+                </p>
             </div>
         </div>
     </div>
