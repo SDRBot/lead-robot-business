@@ -84,7 +84,7 @@ async def dashboard(api_key: str = None, request: Request = None, customer: dict
             <h3>🔗 Quick Actions</h3>
             <a href="/api/leads/test?api_key={customer['api_key']}" class="btn">🧪 Test Lead Capture</a>
             <a href="/webhooks/setup?api_key={customer['api_key']}" class="btn">⚡ Setup Zapier</a>
-            <a href="/docs" class="btn">📚 API Documentation</a>
+            <a href="/support?api_key={customer['api_key']}" class="btn">💬 Get Support</a>
         </div>
         
         <h2>📋 Recent Leads</h2>
