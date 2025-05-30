@@ -6,13 +6,9 @@ import uvicorn
 # Import configuration and services
 from config import settings
 from database import db_service
-from services.stripe_service import stripe_service
 
 # Import all routers
 from routers import leads, auth, dashboard, webhooks
-
-# Import middleware
-from middleware.auth import AuthMiddleware, RateLimitMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,9 +30,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add middleware
-app.add_middleware(AuthMiddleware)
-app.add_middleware(RateLimitMiddleware, calls_per_minute=100)
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if settings.debug else ["https://yourdomain.com"],
@@ -51,7 +45,7 @@ app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(webhooks.router)
 
-# Keep your existing routes from app.py for backward compatibility
+# Your existing homepage
 @app.get("/")
 async def home():
     """Updated homepage mentioning Zapier instead of HubSpot"""
