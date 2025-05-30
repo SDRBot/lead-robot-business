@@ -74,7 +74,7 @@ class DatabaseService:
             )
         ''')
         await self.execute_query('''
-    CREATE TABLE IF NOT EXISTS zapier_webhooks (
+    ALTER TABLE leads ADD COLUMN webhook_sent BOOLEAN DEFAULT FALSE
         id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL,
         webhook_url TEXT NOT NULL,
