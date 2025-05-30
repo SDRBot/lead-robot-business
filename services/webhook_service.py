@@ -1,28 +1,19 @@
 import asyncio
-import aiohttp
+import requests
 import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import logging
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
 class ZapierWebhookService:
-    """Service for Zapier webhook integrations (replaces HubSpot)"""
+    """Service for Zapier webhook integrations using requests"""
     
     def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
-    
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=10),
-            headers={'Content-Type': 'application/json'}
-        )
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
+        self.executor = ThreadPoolExecutor(max_workers=4)
     
     async def send_to_zapier(self, webhook_url: str, lead_data: Dict[str, Any], 
                            retry_count: int = 3) -> bool:
@@ -46,26 +37,38 @@ class ZapierWebhookService:
             }
         }
         
-        for attempt in range(retry_count):
-            try:
-                async with self.session.post(webhook_url, json=zapier_payload) as response:
-                    if response.status == 200:
+        loop = asyncio.get_event_loop()
+        
+        def make_request():
+            for attempt in range(retry_count):
+                try:
+                    response = requests.post(
+                        webhook_url,
+                        json=zapier_payload,
+                        headers={'Content-Type': 'application/json'},
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
                         logger.info(f"✅ Lead sent to Zapier: {lead_data.get('email')}")
                         return True
                     else:
-                        logger.warning(f"Zapier webhook failed: {response.status}")
+                        logger.warning(f"Zapier webhook failed: {response.status_code}")
                         
-            except Exception as e:
-                logger.error(f"Zapier webhook error (attempt {attempt + 1}): {str(e)}")
-                
-            if attempt < retry_count - 1:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                except Exception as e:
+                    logger.error(f"Zapier webhook error (attempt {attempt + 1}): {str(e)}")
+                    
+                if attempt < retry_count - 1:
+                    import time
+                    time.sleep(2 ** attempt)  # Exponential backoff
+            
+            return False
         
-        return False
+        return await loop.run_in_executor(self.executor, make_request)
     
     async def get_customer_webhooks(self, customer_id: str) -> List[Dict[str, Any]]:
         """Get Zapier webhook URLs for a customer"""
-        from .database import db_service
+        from database import db_service
         
         webhooks = await db_service.execute_query(
             "SELECT * FROM zapier_webhooks WHERE customer_id = ? AND active = TRUE",
@@ -77,7 +80,7 @@ class ZapierWebhookService:
     async def save_webhook_config(self, customer_id: str, webhook_url: str, 
                                 events: List[str] = None) -> str:
         """Save Zapier webhook configuration"""
-        from .database import db_service
+        from database import db_service
         
         webhook_id = str(uuid.uuid4())
         events = events or ["lead_qualified"]
