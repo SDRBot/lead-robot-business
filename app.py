@@ -5,7 +5,16 @@ import uuid
 import sqlite3
 from datetime import datetime
 from typing import Optional
-from dotenv import load_dotenv
+# Make dotenv import optional for deployment
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ Loaded environment variables from .env")
+except ImportError:
+    print("⚠️ python-dotenv not available, using system environment variables")
+    # Define empty load_dotenv function
+    def load_dotenv():
+        pass
 from fastapi import FastAPI, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
