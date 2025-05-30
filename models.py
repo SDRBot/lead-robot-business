@@ -1,8 +1,17 @@
 # models.py - Corporate Models
-from pydantic import BaseModel, EmailStr, validator
-from typing import List, Optional, Dict, Any
-from enum import Enum
+from pydantic import BaseModel, EmailStr, HttpUrl
+from typing import Optional, List
 from datetime import datetime
+from enum import Enum
+
+class LeadInput(BaseModel):
+    email: EmailStr
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    company: Optional[str] = None
+    phone: Optional[str] = None
+    source: str = "api"
+    initial_message: Optional[str] = None
 
 class CorporateAccountType(str, Enum):
     STARTUP = "startup"          # 2-10 users
