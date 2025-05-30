@@ -41,86 +41,72 @@ class DatabaseService:
             return
             
         print("🔧 Initializing database...")
-        
-        # Create tables one by one
-        tables = [
-            '''CREATE TABLE IF NOT EXISTS customers (
-                id TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                stripe_customer_id TEXT UNIQUE,
-                stripe_subscription_id TEXT,
-                plan TEXT NOT NULL,
-                status TEXT DEFAULT 'active',
-                api_key TEXT UNIQUE NOT NULL,
-                leads_limit INTEGER NOT NULL,
-                leads_used_this_month INTEGER DEFAULT 0,
-                password_hash TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''',
-            
-            '''CREATE TABLE IF NOT EXISTS leads (
-                id TEXT PRIMARY KEY,
-                customer_id TEXT NOT NULL,
-                email TEXT NOT NULL,
-                first_name TEXT,
-                last_name TEXT,
-                company TEXT,
-                phone TEXT,
-                source TEXT,
-                qualification_score INTEGER DEFAULT 0,
-                qualification_stage TEXT DEFAULT 'new',
-                conversation_data TEXT DEFAULT '[]',
-                webhook_sent BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (customer_id) REFERENCES customers (id)
-            )''',
-            
-            '''CREATE TABLE IF NOT EXISTS analytics (
-                id TEXT PRIMARY KEY,
-                customer_id TEXT,
-                event_type TEXT NOT NULL,
-                data TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (customer_id) REFERENCES customers (id)
-            )''',
-            
-            '''CREATE TABLE IF NOT EXISTS zapier_webhooks (
-                id TEXT PRIMARY KEY,
-                customer_id TEXT NOT NULL,
-                webhook_url TEXT NOT NULL,
-                events TEXT NOT NULL,
-                active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (customer_id) REFERENCES customers (id)
-            )''',
-            
-            '''CREATE TABLE IF NOT EXISTS support_tickets (
-                id TEXT PRIMARY KEY,
-                email TEXT NOT NULL,
-                subject TEXT NOT NULL,
-                message TEXT NOT NULL,
-                category TEXT DEFAULT 'general',
-                priority TEXT DEFAULT 'normal',
-                status TEXT DEFAULT 'open',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )'''
-            # Add this table to your init_database method
-            '''CREATE TABLE IF NOT EXISTS promo_codes (
-            id TEXT PRIMARY KEY,
-            code TEXT UNIQUE NOT NULL,
-            trial_days INTEGER NOT NULL DEFAULT 30,
-            plan_override TEXT,
-            max_uses INTEGER,
-            current_uses INTEGER DEFAULT 0,
-            expires_at TIMESTAMP,
-            description TEXT,
-            active BOOLEAN DEFAULT TRUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''',
-        ]
+        # In database.py, replace the tables list in init_database method:
+tables = [
+    '''CREATE TABLE IF NOT EXISTS customers (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        stripe_customer_id TEXT UNIQUE,
+        stripe_subscription_id TEXT,
+        plan TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        api_key TEXT UNIQUE NOT NULL,
+        leads_limit INTEGER NOT NULL,
+        leads_used_this_month INTEGER DEFAULT 0,
+        password_hash TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )''',
+    
+    '''CREATE TABLE IF NOT EXISTS leads (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        first_name TEXT,
+        last_name TEXT,
+        company TEXT,
+        phone TEXT,
+        source TEXT,
+        qualification_score INTEGER DEFAULT 0,
+        qualification_stage TEXT DEFAULT 'new',
+        conversation_data TEXT DEFAULT '[]',
+        webhook_sent BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_id) REFERENCES customers (id)
+    )''',
+    
+    '''CREATE TABLE IF NOT EXISTS analytics (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT,
+        event_type TEXT NOT NULL,
+        data TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_id) REFERENCES customers (id)
+    )''',
+    
+    '''CREATE TABLE IF NOT EXISTS zapier_webhooks (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT NOT NULL,
+        webhook_url TEXT NOT NULL,
+        events TEXT NOT NULL,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (customer_id) REFERENCES customers (id)
+    )''',
+    
+    '''CREATE TABLE IF NOT EXISTS support_tickets (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        message TEXT NOT NULL,
+        category TEXT DEFAULT 'general',
+        priority TEXT DEFAULT 'normal',
+        status TEXT DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )'''
+]
         
         # Create indexes
         indexes = [
