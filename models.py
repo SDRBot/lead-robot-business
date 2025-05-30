@@ -30,3 +30,15 @@ class WebhookEvent(str, Enum):
     LEAD_CREATED = "lead_created"
     LEAD_QUALIFIED = "lead_qualified"
     LEAD_UPDATED = "lead_updated"
+
+# Add these for API requests
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class SetPasswordRequest(BaseModel):
+    api_key: str
+    password: str
+
+class WebhookTestRequest(BaseModel):
+    webhook_url: str
