@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 from services.admin_service import admin_service
-from models.admin import AdminLogin, PromoCodeCreate, CustomerUpdate
+from models import AdminLogin, PromoCodeCreate, CustomerUpdate
 from datetime import datetime
 
 router = APIRouter(prefix="/admin", tags=["admin"])
