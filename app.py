@@ -691,6 +691,139 @@ async def debug_env():
         "stripe_initialized": stripe_initialized
     }
 
+@app.post("/api/promo-signup")
+async def promo_signup(request: Request):
+    """Create account with promo code - no payment required"""
+    
+    try:
+        body = await request.json()
+        email = body.get('email')
+        promo_code = body.get('promo_code', '').upper()
+        plan = body.get('plan', 'starter')
+        
+        if not email or not promo_code:
+            raise HTTPException(status_code=400, detail="Email and promo code are required")
+        
+        # Valid promo codes with different benefits
+        valid_promo_codes = {
+            'DEMO2025': {'trial_days': 30, 'plan_override': None},
+            'FOUNDER': {'trial_days': 90, 'plan_override': 'professional'},
+            'BETA': {'trial_days': 60, 'plan_override': 'professional'},
+            'TEST': {'trial_days': 14, 'plan_override': None},
+            'UNLIMITED': {'trial_days': 365, 'plan_override': 'professional'},
+            'VIP': {'trial_days': 180, 'plan_override': 'professional'}
+        }
+        
+        if promo_code not in valid_promo_codes:
+            raise HTTPException(status_code=400, detail=f"Invalid promo code: {promo_code}")
+        
+        promo_info = valid_promo_codes[promo_code]
+        final_plan = promo_info['plan_override'] or plan
+        trial_days = promo_info['trial_days']
+        
+        # Check if customer already exists
+        if MODULAR_MODE:
+            existing_customer = await db_service.execute_query(
+                "SELECT * FROM customers WHERE email = ?",
+                (email,),
+                fetch='one'
+            )
+        else:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM customers WHERE email = ?", (email,))
+            existing_customer = cursor.fetchone()
+            conn.close()
+        
+        if existing_customer:
+            raise HTTPException(status_code=400, detail="An account with this email already exists")
+        
+        # Generate API key
+        api_key = f"sk_promo_{str(uuid.uuid4()).replace('-', '')}"
+        customer_id = str(uuid.uuid4())
+        
+        plan_info = PRICING_PLANS[final_plan]
+        
+        # Create customer in database
+        customer_data = {
+            'id': customer_id,
+            'email': email,
+            'plan': final_plan,
+            'api_key': api_key,
+            'leads_limit': plan_info['leads_limit'],
+            'status': 'active'
+        }
+        
+        if MODULAR_MODE:
+            await db_service.create_customer(customer_data)
+            
+            # Log the promo signup
+            await db_service.log_analytics_event(
+                customer_id, 
+                "promo_signup", 
+                {
+                    "promo_code": promo_code,
+                    "plan": final_plan,
+                    "trial_days": trial_days,
+                    "email": email
+                }
+            )
+        else:
+            # Legacy database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                INSERT INTO customers (
+                    id, email, plan, api_key, leads_limit, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                customer_id, email, final_plan, api_key, plan_info['leads_limit'], 
+                'active', datetime.now(), datetime.now()
+            ))
+            
+            # Log analytics
+            cursor.execute('''
+                INSERT INTO analytics (id, customer_id, event_type, data, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                str(uuid.uuid4()), customer_id, "promo_signup",
+                json.dumps({
+                    "promo_code": promo_code,
+                    "plan": final_plan,
+                    "trial_days": trial_days,
+                    "email": email
+                }), datetime.now()
+            ))
+            
+            conn.commit()
+            conn.close()
+        
+        # Send welcome email
+        if MODULAR_MODE:
+            try:
+                await email_service.send_welcome_email(email, final_plan, api_key)
+            except Exception as e:
+                print(f"⚠️ Welcome email failed: {e}")
+        
+        return {
+            "success": True,
+            "customer_id": customer_id,
+            "email": email,
+            "api_key": api_key,
+            "plan": final_plan,
+            "plan_name": plan_info['name'],
+            "trial_days": trial_days,
+            "promo_code": promo_code,
+            "message": f"Account created with {trial_days} day trial!"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Promo signup error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating account: {str(e)}")
+
 @app.get("/checkout/{plan}")
 async def checkout(plan: str, request: Request):
     """Create Stripe checkout session with better debugging"""
