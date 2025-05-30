@@ -91,3 +91,8 @@ class CorporateAnalytics(BaseModel):
     conversion_rates: Dict[str, float]
     top_performing_agents: List[Dict[str, Any]]
     monthly_trends: Dict[str, List[float]]
+# models.py - Add this missing model
+class ZapierWebhookConfig(BaseModel):
+    webhook_url: HttpUrl
+    events: List[str] = ["lead_qualified"]
+    active: bool = True
