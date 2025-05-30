@@ -148,3 +148,69 @@ async def webhook_setup_page(api_key: str):
             <p style="text-align: center; margin-top: 30px;">
                 <a href="/dashboard?api_key={api_key}" class="btn">← Back to Dashboard</a>
             </p>
+    </div>
+        
+        <script>
+            async function testWebhook() {
+                const webhookUrl = document.getElementById('webhookUrl').value;
+                if (!webhookUrl) {
+                    document.getElementById('result').innerHTML = '<div class="error">Please enter a webhook URL</div>';
+                    return;
+                }
+                
+                try {
+                    const response = await fetch('/webhooks/zapier/test', {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer {api_key}'
+                        },
+                        body: JSON.stringify({ webhook_url: webhookUrl })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        document.getElementById('result').innerHTML = '<div class="success">✅ Test webhook sent successfully! Check your Zapier dashboard.</div>';
+                    } else {
+                        document.getElementById('result').innerHTML = '<div class="error">❌ Test webhook failed. Please check your URL.</div>';
+                    }
+                } catch (error) {
+                    document.getElementById('result').innerHTML = '<div class="error">❌ Error testing webhook</div>';
+                }
+            }
+            
+            document.getElementById('webhookForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const webhookUrl = document.getElementById('webhookUrl').value;
+                
+                try {
+                    const response = await fetch('/webhooks/zapier', {
+                        method: 'POST',
+                        headers: { 
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer {api_key}'
+                        },
+                        body: JSON.stringify({
+                            webhook_url: webhookUrl,
+                            events: ["lead_qualified"],
+                            active: true
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        document.getElementById('result').innerHTML = '<div class="success">✅ Webhook saved successfully!</div>';
+                    } else {
+                        document.getElementById('result').innerHTML = '<div class="error">❌ Error saving webhook</div>';
+                    }
+                } catch (error) {
+                    document.getElementById('result').innerHTML = '<div class="error">❌ Error saving webhook</div>';
+                }
+            });
+        </script>
+    </body>
+    </html>
+    """
