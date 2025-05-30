@@ -109,17 +109,32 @@ class LeadInputLegacy(BaseModel):
 LeadModel = LeadInput if MODULAR_MODE else LeadInputLegacy
 
 # Startup event
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup"""
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    """Application lifespan management"""
+    # Startup
     if MODULAR_MODE:
         await db_service.init_database()
         print("✅ Modular database initialized")
     else:
-        # Your existing database initialization
         init_database()
         print("✅ Legacy database initialized")
+    
+    yield
+    
+    # Shutdown
+    print("🔄 Application shutting down")
 
+# Update your FastAPI app creation to:
+app = FastAPI(
+    title="AI Lead Qualification System with Zapier Integration",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=lifespan
+)
 # Your existing database functions (keep for fallback)
 def get_db_connection():
     conn = sqlite3.connect('leads.db')
