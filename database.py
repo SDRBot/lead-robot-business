@@ -119,6 +119,19 @@ class DatabaseService:
                 FOREIGN KEY (customer_id) REFERENCES customers (id)
             )
         ''')
+        await self.execute_query('''
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                message TEXT NOT NULL,
+                category TEXT DEFAULT 'general',
+                priority TEXT DEFAULT 'normal',
+                status TEXT DEFAULT 'open',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
         # Add indexes for performance
         await self.execute_query('CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads(customer_id)')
