@@ -119,6 +119,15 @@ class DatabaseService:
                 FOREIGN KEY (customer_id) REFERENCES customers (id)
             )
         ''')
+
+        # Add indexes for performance
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_leads_customer_id ON leads(customer_id)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_leads_email ON leads(email)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_customers_api_key ON customers(api_key)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email)')
+        await self.execute_query('CREATE INDEX IF NOT EXISTS idx_zapier_webhooks_customer_id ON zapier_webhooks(customer_id)')
+               
         await self.execute_query('''
             CREATE TABLE IF NOT EXISTS support_tickets (
                 id TEXT PRIMARY KEY,
