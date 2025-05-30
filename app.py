@@ -68,7 +68,11 @@ if not MODULAR_MODE:
     }
 
 # Create FastAPI app
-app = FastAPI(title="AI Lead Qualification System with Zapier Integration")
+app = FastAPI(
+    title="AI Lead Qualification System with Zapier Integration",
+    docs_url=None,  # Disable /docs
+    redoc_url=None,  # Disable /redoc
+    openapi_url=None  # Disable /openapi.json
 
 # CORS middleware
 app.add_middleware(
