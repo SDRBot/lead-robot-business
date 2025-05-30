@@ -1,4 +1,4 @@
-from pydantic import BaseSettings  # Change this line
+from pydantic import BaseSettings  # Use this for pydantic 2.5.0
 from typing import Optional
 import os
 
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Pricing plans (moved from app.py)
+# Pricing plans configuration
 PRICING_PLANS = {
     "starter": {
         "name": "Starter Plan",
@@ -56,7 +56,7 @@ PRICING_PLANS = {
         "features": [
             "2,000 leads per month",
             "Everything in Starter",
-            "Zapier integrations",  # Updated from HubSpot
+            "Zapier integrations",
             "Advanced analytics",
             "Priority support",
             "API access"
