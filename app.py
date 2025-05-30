@@ -577,6 +577,84 @@ async def home():
             </div>
         </div>
     </div>
+        <div style="background: #e8f5e9; padding: 40px; border-radius: 15px; margin: 40px auto; max-width: 500px; text-align: center; border: 2px dashed #28a745;">
+            <h3 style="color: #155724; margin-top: 0;">🎁 Have a Promo Code?</h3>
+            <p style="color: #155724;">Get instant access without entering payment details!</p>
+            
+            <form id="promoForm" style="margin: 20px 0;">
+                <input type="email" id="promoEmail" placeholder="your@email.com" required 
+                       style="width: 100%; padding: 12px; border: 1px solid #28a745; border-radius: 5px; margin-bottom: 15px; box-sizing: border-box;">
+                
+                <input type="text" id="promoCode" placeholder="Enter promo code" required 
+                       style="width: 100%; padding: 12px; border: 1px solid #28a745; border-radius: 5px; margin-bottom: 15px; box-sizing: border-box; text-transform: uppercase;">
+                
+                <select id="promoPlan" style="width: 100%; padding: 12px; border: 1px solid #28a745; border-radius: 5px; margin-bottom: 15px;">
+                    <option value="starter">Starter Plan (500 leads/month)</option>
+                    <option value="professional">Professional Plan (2,000 leads/month)</option>
+                </select>
+                
+                <button type="submit" style="background: #28a745; color: white; padding: 15px 30px; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; width: 100%;">
+                    🚀 Activate Free Account
+                </button>
+            </form>
+            
+            <div id="promoResult"></div>
+            
+            <p style="font-size: 12px; color: #6c757d; margin-top: 15px;">
+                Valid promo codes: DEMO2025, FOUNDER, BETA, TEST
+            </p>
+        </div>
+        
+    </div>  <!-- End of container -->
+    
+    <script>
+        document.getElementById('promoForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('promoEmail').value;
+            const code = document.getElementById('promoCode').value.toUpperCase();
+            const plan = document.getElementById('promoPlan').value;
+            
+            document.getElementById('promoResult').innerHTML = '<div style="color: #666; padding: 10px;">🔄 Creating your account...</div>';
+            
+            try {
+                const response = await fetch('/api/promo-signup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, promo_code: code, plan })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    document.getElementById('promoResult').innerHTML = `
+                        <div style="background: #d4edda; color: #155724; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                            <h4 style="margin-top: 0;">🎉 Account Created!</h4>
+                            <p><strong>API Key:</strong> <code style="background: #f8f9fa; padding: 2px 6px; border-radius: 3px;">${result.api_key}</code></p>
+                            <p><strong>Plan:</strong> ${result.plan_name}</p>
+                            <p><strong>Trial Days:</strong> ${result.trial_days}</p>
+                            <a href="/dashboard?api_key=${result.api_key}" style="background: #667eea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">
+                                📊 Go to Dashboard
+                            </a>
+                        </div>
+                    `;
+                    document.getElementById('promoForm').style.display = 'none';
+                } else {
+                    document.getElementById('promoResult').innerHTML = `
+                        <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                            ❌ ${result.detail}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('promoResult').innerHTML = `
+                    <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px; margin: 10px 0;">
+                        ❌ Error creating account. Please try again.
+                    </div>
+                `;
+            }
+        });
+    </script>
     
     <div style="background: #2c3e50; color: white; padding: 60px 0; margin-top: 80px; text-align: center;">
         <div class="container">
