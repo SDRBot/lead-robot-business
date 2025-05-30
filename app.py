@@ -267,11 +267,12 @@ def verify_api_key(api_key: str):
 # Include modular routers if available
 if MODULAR_MODE:
     try:
-        from routers import auth, dashboard, webhooks, support
+        from routers import auth, dashboard, webhooks, support, admin
         app.include_router(auth.router)
         app.include_router(dashboard.router)  
         app.include_router(webhooks.router)
         app.include_router(support.router)
+        app.include_router(admin.router)
         print("✅ Modular routers loaded")
     except ImportError as e:
         print(f"⚠️ Some modular routers failed to load: {e}")
